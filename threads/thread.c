@@ -222,11 +222,26 @@ thread_create (const char *name, int priority,
 	t = palloc_get_page (PAL_ZERO);
 	if (t == NULL)
 		return TID_ERROR;
-	struct thread *curr = thread_current();
 
 	/* Initialize thread. */
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
+
+#ifdef USERPROG
+	/** project2-System Call */
+    t->fd_table = palloc_get_multiple(PAL_ZERO, FDT_PAGES);
+    if (t->fd_table == NULL)
+        return TID_ERROR;
+
+    t->exit_status = 0;  // exit_status 초기화
+
+    t->fd_idx = 3;
+    t->fd_table[0] = 0;  // stdin 예약된 자리 (dummy)
+    t->fd_table[1] = 1;  // stdout 예약된 자리 (dummy)
+    t->fd_table[2] = 2;  // stderr 예약된 자리 (dummy)
+
+    list_push_back(&thread_current()->child_list, &t->child_elem);
+#endif	
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -238,13 +253,6 @@ thread_create (const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
-	t->already_waited = false;
-	sema_init(&t->wait_sema, 0);
-	sema_init(&t->free_sema, 0);
-	sema_init(&t->fork_sema, 0);
-	t->parent = curr;
-
-	list_push_back(&curr->child_list, &t->child_elem);
 	/* Add to run queue. */
 	thread_unblock (t);
 	/* 현재와 가장 높은 우선순위 비교후 현재보다 우선순위가 높다면 양보 */
@@ -335,7 +343,7 @@ thread_exit (void) {
 	/* Just set our status to dying and schedule another process.
 	We will be destroyed during the call to schedule_tail(). */
 	intr_disable ();
-	sema_down(&curr->free_sema);
+	// sema_down(&curr->free_sema);
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();
 }
@@ -491,6 +499,7 @@ kernel_thread (thread_func *function, void *aux) {
    NAME. */
 static void
 init_thread (struct thread *t, const char *name, int priority) {
+	t->magic = THREAD_MAGIC; 
     ASSERT (t != NULL);
     ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
     ASSERT (name != NULL);
@@ -511,10 +520,7 @@ init_thread (struct thread *t, const char *name, int priority) {
     }
 
 #ifdef USERPROG
-    /* 파일 디스크립터 관리용 필드 초기화
-       0=stdin, 1=stdout 2 =stderr 이므로 3부터 시작 */
-    t->last_created_fd = 3;
-    list_init(&t->fd_list);
+   
 #endif
 
     /* 우선순위 기부용 필드 초기화 */
@@ -525,8 +531,15 @@ init_thread (struct thread *t, const char *name, int priority) {
 
     /* 스택 오버플로우 검출용 매직 넘버 설정 */
     t->magic = THREAD_MAGIC;
+	t->running = NULL;
+	t->parent = running_thread();
+	t->already_waited = false;
 
     t->init_priority = t->priority;
+	sema_init(&t->wait_sema, 0);
+	sema_init(&t->fork_sema, 0);
+	sema_init(&t->exit_sema, 0);
+
 	/* MLFQ : nice, recent_cpu 초기화 */
 	t->niceness = NICE_DEFAULT;
     t->recent_cpu = RECENT_CPU_DEFAULT;
@@ -798,8 +811,12 @@ void cmp_nowNfirst (void){
  
     struct thread *th = list_entry(list_front(&ready_list), struct thread, elem);
  
-    if (!intr_context() && thread_get_priority() < th->priority)
-        thread_yield();
+    if (thread_current()->priority < th->priority){
+        if (intr_context())
+            intr_yield_on_return();
+        else
+            thread_yield();
+	}
 }
 
 void donation_priority(void){
@@ -946,35 +963,5 @@ mlfqs_increment (void)
 
 	/* recent_cpu 값 1증가 */
     thread_current()->recent_cpu = add_mixed(thread_current()->recent_cpu, 1);
-}
-
-int allocate_fd (struct file *file)
-{
-    // 파일 디스크립터 할당
-    struct file_descriptor *desc = malloc (sizeof *desc);
-    if (desc == NULL)
-      return -1;
-
-    // 현재 스레드의 fd_list 에 추가
-    struct thread *t = thread_current ();
-    desc->fd     = t->last_created_fd++;
-    desc->file_p = file;
-    list_push_back (&t->fd_list, &desc->fd_elem);
-
-    // 발급된 fd 반환
-    return desc->fd;
-}
-
-
-struct file *find_file_by_fd(int fd) {
-    struct thread *cur = thread_current();
-    struct list_elem *e;
-    for (e = list_begin(&cur->fd_list); e != list_end(&cur->fd_list); e = list_next(e)) {
-        struct file_descriptor *d =
-            list_entry(e, struct file_descriptor, fd_elem);
-        if (d->fd == fd)
-            return d->file_p;
-    }
-    return NULL;  // 모든 요소 검사 후에도 매칭이 없으면 NULL 반환
 }
 

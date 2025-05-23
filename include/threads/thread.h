@@ -11,12 +11,9 @@
 #include "vm/vm.h"
 #endif
 
-struct file_descriptor {
-    int fd;                  /* 할당된 FD 번호 */
-    struct file *file_p;     /* 실제 파일 포인터 */
-    struct list_elem fd_elem;/* fd_list 에 들어갈 elem */
-};
-
+/* FDT 관련 상수 정의 */
+#define FDT_PAGES 3
+#define FDCOUNT_LIMIT (FDT_PAGES * (1 << 9))  // 페이지당 512개 엔트리
 
 /* States in a thread's life cycle. */
 enum thread_status {
@@ -29,7 +26,6 @@ enum thread_status {
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
-#define MAX_FD_NUM 128
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
 /* Thread priorities. */
@@ -107,7 +103,6 @@ struct thread {
     int priority;                       /* Priority. */
     int64_t weakeup_tick;               /* 깨어날 tick */
 
-	int exit_status;
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -123,12 +118,12 @@ struct thread {
     int recent_cpu;
     struct list_elem all_elem;          /* all_list 연결 elem */
 
-    /* File descriptor management (항상 사용) */
-    int last_created_fd;                /* 다음 발급할 FD 번호 */
-    struct list fd_list;                /* file_descriptor 리스트 */
+    /* File Descriptor Table (FDT) 관리 */
+    struct file **fd_table;             /* 파일 디스크립터 테이블 */
+    int fd_idx;                         /* 다음 할당할 FD 번호 */
 
 #ifdef USERPROG
-	/* Owned by userprog/process.c. */
+	int exit_status;
 	struct list child_list;
 	struct list_elem child_elem;
 	struct thread *parent;
@@ -143,8 +138,9 @@ struct thread {
     struct supplemental_page_table spt; /* 가상 메모리 테이블 */
 #endif
 	struct semaphore wait_sema;
-	struct semaphore free_sema;
 	struct semaphore fork_sema;
+	struct semaphore exit_sema;
+
 
     /* Owned by thread.c. */
     struct intr_frame tf;               /* 스위칭 정보 */
@@ -207,6 +203,6 @@ void mlfqs_load_avg(void);
 void mlfqs_increment(void);
 void mlfqs_recalc_recent_cpu(void);
 void mlfqs_recalc_priority(void);
-int allocate_fd (struct file *file);
-struct file *find_file_by_fd(int fd);
+
+
 #endif /* THREADS_THREAD_H */
