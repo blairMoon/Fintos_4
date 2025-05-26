@@ -14,6 +14,7 @@
 #include "threads/fixed_point.h" // MLFQ 부동소수점 계산을 위한 헤더
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "filesys/file.h" 
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -124,6 +125,7 @@ thread_init (void) {
 	list_init (&destruction_req);
 	list_init (&sleep_list);
 	list_init (&all_list); /* MLFQ all_list 초기화 */
+	
 
 	/* Set up a thread structure for the running thread. */
 	initial_thread = running_thread ();
@@ -225,6 +227,21 @@ thread_create (const char *name, int priority,
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
 
+#ifdef USERPROG
+    t->fd_table = palloc_get_multiple(PAL_ZERO, FDT_PAGES);
+    if (t->fd_table == NULL)
+        return TID_ERROR;
+
+    t->exit_status = 0;  // exit_status 초기화
+
+    t->fd_idx = 3;
+    t->fd_table[0] = 0;  // stdin 예약된 자리 (dummy)
+    t->fd_table[1] = 1;  // stdout 예약된 자리 (dummy)
+    t->fd_table[2] = 2;  // stderr 예약된 자리 (dummy)
+
+    list_push_back(&thread_current()->child_list, &t->child_elem);
+#endif	
+
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
 	t->tf.rip = (uintptr_t) kernel_thread;
@@ -235,7 +252,6 @@ thread_create (const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
-
 	/* Add to run queue. */
 	thread_unblock (t);
 	/* 현재와 가장 높은 우선순위 비교후 현재보다 우선순위가 높다면 양보 */
@@ -316,7 +332,7 @@ thread_tid (void) {
 void
 thread_exit (void) {
 	ASSERT (!intr_context ());
-
+	struct thread *curr = thread_current();
 #ifdef USERPROG
 	process_exit ();
 #endif
@@ -326,6 +342,7 @@ thread_exit (void) {
 	/* Just set our status to dying and schedule another process.
 	We will be destroyed during the call to schedule_tail(). */
 	intr_disable ();
+	// sema_down(&curr->free_sema);
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();
 }
@@ -481,15 +498,19 @@ kernel_thread (thread_func *function, void *aux) {
    NAME. */
 static void
 init_thread (struct thread *t, const char *name, int priority) {
-	ASSERT (t != NULL);
-	ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
-	ASSERT (name != NULL);
+	t->magic = THREAD_MAGIC; 
+    ASSERT (t != NULL);
+    ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
+    ASSERT (name != NULL);
 
-	memset (t, 0, sizeof *t);
-	t->status = THREAD_BLOCKED;
-	strlcpy (t->name, name, sizeof t->name);
-	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
-	/* MLFQ의 경우 우선순위를 별도로 계산한다. 또한 all_list에 추가한다. */
+    /* 구조체 전체를 0으로 초기화해야 이후 세팅한 값들이 덮어써지지 않습니다 */
+    memset (t, 0, sizeof *t);
+
+    t->status = THREAD_BLOCKED;
+    strlcpy (t->name, name, sizeof t->name);
+    t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
+
+    /* MLFQ 사용 여부에 따라 우선순위 초기화 */
     if (thread_mlfqs) {
         mlfqs_priority(t);
         list_push_back(&all_list, &t->all_elem);
@@ -497,17 +518,30 @@ init_thread (struct thread *t, const char *name, int priority) {
         t->priority = priority;
     }
 
-	t->wait_on_lock = NULL;
+#ifdef USERPROG
+	t->exit_status = 0;
+	t->running = NULL;
+
+	sema_init(&t->wait_sema, 0);
+	sema_init(&t->fork_sema, 0);
+	sema_init(&t->exit_sema, 0);
+
+	/* 프로세스 관계 초기화 */
+	list_init(&t->child_list);
+#endif
+    /* 우선순위 기부용 필드 초기화 */
+    t->wait_on_lock = NULL;
     list_init(&t->donations);
 
+    /* 스택 오버플로우 검출용 매직 넘버 설정 */
     t->magic = THREAD_MAGIC;
-
+	t->parent = running_thread();
     t->init_priority = t->priority;
-	/* MLFQ : nice, recent_cpu 초기화 */
-	t->niceness = NICE_DEFAULT;
-    t->recent_cpu = RECENT_CPU_DEFAULT;
-}
 
+    /* MLFQ 관련 필드 초기화 */
+    t->niceness    = NICE_DEFAULT;
+    t->recent_cpu  = RECENT_CPU_DEFAULT;
+}
 /* Chooses and returns the next thread to be scheduled.  Should
    return a thread from the run queue, unless the run queue is
    empty.  (If the running thread can continue running, then it
@@ -768,8 +802,12 @@ void cmp_nowNfirst (void){
  
     struct thread *th = list_entry(list_front(&ready_list), struct thread, elem);
  
-    if (thread_get_priority() < th->priority)
-        thread_yield();
+    if (thread_current()->priority < th->priority){
+        if (intr_context())
+            intr_yield_on_return();
+        else
+            thread_yield();
+	}
 }
 
 void donation_priority(void){
@@ -917,3 +955,4 @@ mlfqs_increment (void)
 	/* recent_cpu 값 1증가 */
     thread_current()->recent_cpu = add_mixed(thread_current()->recent_cpu, 1);
 }
+
