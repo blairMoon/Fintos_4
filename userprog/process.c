@@ -82,29 +82,24 @@ initd (void *f_name) {
 }
 
 
-/* 현재 프로세스를 name으로 복제합니다. 새 프로세스의 스레드 ID를 반환하거나,
- * 스레드를 생성할 수 없는 경우 TID_ERROR를 반환합니다.*/
-tid_t
-process_fork (const char *name, struct intr_frame *if_ UNUSED) {
-	struct thread *curr = thread_current();
+tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED) {
+    struct thread *curr = thread_current();
 
-    struct intr_frame *f = (pg_round_up(rrsp()) - sizeof(struct intr_frame));  // 현재 쓰레드의 if_는 페이지 마지막에 붙어있다.
-    memcpy(&curr->parent_if, f, sizeof(struct intr_frame));                    // 1. 부모를 찾기 위해서 2. do_fork에 전달해주기 위해서
+    // 직접 넘겨받은 intr_frame을 복사
+    memcpy(&curr->parent_if, if_, sizeof(struct intr_frame));
 
-    /* 현재 스레드를 새 스레드로 복제합니다.*/
     tid_t tid = thread_create(name, PRI_DEFAULT, __do_fork, curr);
-    
+
     if (tid == TID_ERROR)
         return TID_ERROR;
 
     struct thread *child = get_child_process(tid);
-    
-	sema_down(&child->fork_sema);  // 생성만 해놓고 자식 프로세스가 __do_fork에서 fork_sema를 sema_up 해줄 때까지 대기
+    sema_down(&child->fork_sema);  // 자식이 준비될 때까지 기다림
 
     if (child->exit_status == TID_ERROR)
         return TID_ERROR;
 
-    return tid;  // 부모 프로세스의 리턴값 : 생성한 자식 프로세스의 tid
+    return tid;
 }
 
 #ifndef VM

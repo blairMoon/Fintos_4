@@ -128,7 +128,7 @@ struct thread {
 	struct list_elem child_elem;
 	struct thread *parent;
     struct file *running;
-	bool already_waited;
+
 	struct intr_frame parent_if;
     /* Owned by userprog/process.c. */
     uint64_t *pml4;                     /* 페이지 맵 레벨 4 포인터 */

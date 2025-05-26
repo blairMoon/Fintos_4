@@ -16,7 +16,7 @@
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 bool create (const char *file, unsigned initial_size);
-tid_t fork (const char *thread_name);
+tid_t fork(const char *thread_name, struct intr_frame *f); 
 bool remove (const char *file);
 int exec (const char *file_name);
 int filesize(int fd) ;
@@ -74,7 +74,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		exit(f->R.rdi);	// 프로세스 종료
 		break;
 	case SYS_FORK:
-		f->R.rax = fork(f->R.rdi);
+        f->R.rax = fork(f->R.rdi, f);
 		break;
 	case SYS_EXEC:
 		f->R.rax = exec(f->R.rdi);
@@ -180,10 +180,9 @@ int open (const char *file) {
     return fd;
 }
 
-tid_t fork(const char *thread_name) {
+tid_t fork(const char *thread_name, struct intr_frame *f) {
     check_address(thread_name);
-
-    return process_fork(thread_name, NULL);
+    return process_fork(thread_name, f);  // 실제 유저 컨텍스트를 넘긴다
 }
 
 int read(int fd, void *buffer, unsigned size) {

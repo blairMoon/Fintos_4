@@ -228,7 +228,6 @@ thread_create (const char *name, int priority,
 	tid = t->tid = allocate_tid ();
 
 #ifdef USERPROG
-	/** project2-System Call */
     t->fd_table = palloc_get_multiple(PAL_ZERO, FDT_PAGES);
     if (t->fd_table == NULL)
         return TID_ERROR;
@@ -520,32 +519,24 @@ init_thread (struct thread *t, const char *name, int priority) {
     }
 
 #ifdef USERPROG
-   
-#endif
-
-    /* 우선순위 기부용 필드 초기화 */
-    t->wait_on_lock = NULL;
 	t->exit_status = 0;
-	t->wait_on_lock = NULL;
-    list_init(&t->donations);
-
-    /* 스택 오버플로우 검출용 매직 넘버 설정 */
-    t->magic = THREAD_MAGIC;
 	t->running = NULL;
-	t->parent = running_thread();
-	t->already_waited = false;
 
-    t->init_priority = t->priority;
 	sema_init(&t->wait_sema, 0);
 	sema_init(&t->fork_sema, 0);
 	sema_init(&t->exit_sema, 0);
 
-	/* MLFQ : nice, recent_cpu 초기화 */
-	t->niceness = NICE_DEFAULT;
-    t->recent_cpu = RECENT_CPU_DEFAULT;
-
 	/* 프로세스 관계 초기화 */
 	list_init(&t->child_list);
+#endif
+    /* 우선순위 기부용 필드 초기화 */
+    t->wait_on_lock = NULL;
+    list_init(&t->donations);
+
+    /* 스택 오버플로우 검출용 매직 넘버 설정 */
+    t->magic = THREAD_MAGIC;
+	t->parent = running_thread();
+    t->init_priority = t->priority;
 
     /* MLFQ 관련 필드 초기화 */
     t->niceness    = NICE_DEFAULT;
