@@ -69,6 +69,7 @@ exception_print_stats (void) {
 /* Handler for an exception (probably) caused by a user process. */
 static void
 kill (struct intr_frame *f) {
+	struct thread *t = thread_current(); 
 	/* This interrupt is one (probably) caused by a user process.
 	   For example, the process might have tried to access unmapped
 	   virtual memory (a page fault).  For now, we simply kill the
@@ -83,10 +84,9 @@ kill (struct intr_frame *f) {
 		case SEL_UCSEG:
 			/* User's code segment, so it's a user exception, as we
 			   expected.  Kill the user process.  */
-			printf ("%s: dying due to interrupt %#04llx (%s).\n",
-					thread_name (), f->vec_no, intr_name (f->vec_no));
-			intr_dump_frame (f);
-			thread_exit ();
+			printf("%s: exit(-1)\n", t->name);
+			t->exit_status = -1;
+			thread_exit();
 
 		case SEL_KCSEG:
 			/* Kernel's code segment, which indicates a kernel bug.
@@ -157,4 +157,3 @@ page_fault (struct intr_frame *f) {
 	// 		user ? "user" : "kernel");
 	// kill (f);
 }
-
