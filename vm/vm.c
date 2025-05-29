@@ -3,6 +3,9 @@
 #include "threads/malloc.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
+/* 25.05.30 고재웅 작성 */
+#include <hash.h>
+#include "threads/vaddr.h"
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -66,7 +69,16 @@ spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	struct page *page = NULL;
 	/* TODO: Fill this function. */
 
-	return page;
+	/* 25.05.30 고재웅 작성 */
+	page.va = pg_round_down(va);
+	// 보조 테이블에서 va가 포함된 구조체를 찾는다.
+  	struct hash_elem *find_elem = hash_find(&spt->pages, page->hash_elem);
+	// 찾지 못했다면 NULL 반환
+	if (find_elem == NULL){
+		return NULL;
+	}
+	// 구조체를 찾으면 구조체를 반환
+	return hash_entry(find_elem, struct page, hash_elem);
 }
 
 /* Insert PAGE into spt with validation. */
@@ -76,6 +88,16 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 	int succ = false;
 	/* TODO: Fill this function. */
 
+	/* 25.05.30 고재웅 작성 */
+	// 먼저 페이지 테이블에서 가상 주소가 존재하지 않는지 검사한다.
+	struct hash_elem *prev_elem = hash_find(&spt->pages, &page->hash_elem);
+	if (prev_elem == NULL){
+	  	// 페이지 테이블에 페이지 구조체를 삽입한다.
+		if (hash_insert(&spt->pages, &page->hash_elem)){
+			succ = true;
+			return succ;
+		}
+	}
 	return succ;
 }
 
@@ -172,8 +194,11 @@ vm_do_claim_page (struct page *page) {
 }
 
 /* Initialize new supplemental page table */
+/* 25.05.30 고재웅 작성 */
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+	/* SPT 초기화시 hash_init에 아래 작성한 page_hash, page_less를 포함한다. */
+	hash_init(&spt->pages, page_hash, page_less, NULL);
 }
 
 /* Copy supplemental page table from src to dst */
@@ -187,4 +212,21 @@ void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
 	/* TODO: Destroy all the supplemental_page_table hold by thread and
 	 * TODO: writeback all the modified contents to the storage. */
+}
+
+/* 25.05.30 고재웅 작성 */
+/* SPT 해시 테이블에 넣기 위한 hash_func & less_func 함수 구현 */
+
+/* page_hash 가상 주소를 바탕으로 해시값을 계산한다. */
+uint64_t page_hash(onst struct hash_elem *e, void *aux){
+	struct page *p = hash_entry(e, struct page, hash_elem);
+	return hash_bytes(&p, sizeof(p->va));
+}
+
+/* 두 page의 va를 기준으로 정렬을 비교한다. */
+bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux){
+	/* 이 함수는 해시 테이블 충돌 시 내부 정렬에 사용된다고 한다. */
+	struct page *pa = hash_entry(a, struct page, hash_elem);
+	struct page *pb = hash_entry(b, struct page, hesh_elem);
+	return pa->va < pb->va;
 }
