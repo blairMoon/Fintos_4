@@ -36,16 +36,20 @@ struct thread;
 
 #define VM_TYPE(type) ((type) & 7)
 
-/* The representation of "page".
- * This is kind of "parent class", which has four "child class"es, which are
- * uninit_page, file_page, anon_page, and page cache (project4).
- * DO NOT REMOVE/MODIFY PREDEFINED MEMBER OF THIS STRUCTURE. */
+/* "페이지" 표현.
+ * 이는 일종의 "부모 클래스"이며, 네 개의 "자식 클래스"를 갖습니다.
+ * uninit_page, file_page, anon_page, 그리고 page cache(project4)입니다.
+ * 이 구조체의 미리 정의된 멤버를 제거하거나 수정하지 마십시오. */
 struct page {
 	const struct page_operations *operations;
 	void *va;              /* Address in terms of user space */
 	struct frame *frame;   /* Back reference for frame */
 
 	/* Your implementation */
+	/* 25.05.30 고재웅 작성 */
+	struct hash_elem hash_elem;			// 해시 저장용 elem
+	bool writable; 						// 쓰기 가능한 페이지 인지
+	bool is_loaded;						// 실제로 프레임에 로드되어 있는지
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -85,6 +89,8 @@ struct page_operations {
  * We don't want to force you to obey any specific design for this struct.
  * All designs up to you for this. */
 struct supplemental_page_table {
+	/* 25.05.30 고재웅 작성 */
+	struct hash pages; 
 };
 
 #include "threads/thread.h"
@@ -108,5 +114,11 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
 enum vm_type page_get_type (struct page *page);
+
+/* 25.05.30 고재웅 작성 */
+/* SPT 해시 테이블에 넣기 위한 hash_func & less_func 함수 선언 */
+uint64_t page_hash(onst struct hash_elem *e, void *aux);
+bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux);
+
 
 #endif  /* VM_VM_H */
