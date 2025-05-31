@@ -6,6 +6,7 @@
 #ifndef VM_VM_H
 #define VM_VM_H
 #include <stdbool.h>
+#include <hash.h>
 #include "threads/palloc.h"
 
 enum vm_type {
@@ -40,6 +41,7 @@ enum vm_type {
 
 struct page_operations;
 struct thread;
+struct list frame_table;
 
 #define VM_TYPE(type) ((type) & 7)
 
@@ -74,6 +76,10 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
+	struct list_elem elem; 
+	struct thread *owner;
+	bool pinned;
+
 };
 
 /* 페이지 작업을 위한 함수 테이블입니다.

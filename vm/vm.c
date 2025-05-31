@@ -1,6 +1,5 @@
 /* vm.c: 
  * 가상 메모리(Virtual Memory) 전반에 대한 인터페이스를 제공
- * 
  */
 
 #include "threads/malloc.h"
@@ -16,6 +15,7 @@
 void 
 vm_init (void)
 {
+	list_init(&frame_table);	/* 25.05.30 고재웅 작성 */
 	vm_anon_init();
 	vm_file_init();
 #ifdef EFILESYS /* For project 4 */
@@ -55,41 +55,43 @@ vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
 
 	ASSERT(VM_TYPE(type) != VM_UNINIT)
 
-	struct supplemental_page_table *spt = &thread_current()->spt;
+	struct supplemental_page_table *spt = &thread_current ()->spt;
+	struct page *page = NULL;
 
-	/* 이미 해당 page가 SPT에 존재하는지 확인합니다. */
-	if (spt_find_page(spt, upage) == NULL)
-	{
-		/* TODO: VM 타입에 따라 페이지를 생성하고, 초기화 함수를 가져온 뒤,
-		 * TODO: uninit_new를 호출하여 "uninit" 페이지 구조체를 생성하세요.
-		 * TODO: uninit_new 호출 후에는 필요한 필드를 수정해야 합니다. */
+	/* Check wheter the upage is already occupied or not. */
+	if (spt_find_page (spt, upage) == NULL) {
+		/* TODO: 페이지를 생성하고, VM 유형에 따라 초기화 파일을 가져옵니다.Add commentMore actions
+		 * TODO: 그런 다음 uninit_new를 호출하여 "uninit" 페이지 구조체를 생성합니다.
+		 * TODO: uninit_new를 호출한 후 필드를 수정해야 합니다. */
+		page = malloc(sizeof(struct page));
+		if (page == NULL) {
+			return false;
+		}
+		bool (*page_initializer) (struct page *, enum vm_type, void *kva) = NULL;
 
-		// /* 25.05.30 정진영 작성 */ 
-		// bool (*page_initializer)(struct page *, enum vm_type, void *kva);
-		// struct page *page = malloc(sizeof(struct page));
-		// page->writable = writable;
-
-		// switch (VM_TYPE(type))
-		// {
-		// case VM_ANON:
-		// 	page_initializer = anon_initializer;
-		// 	break;
-		// case VM_MMAP:
-		// 	/* 매핑 카운트를 추가해두자
-		// 	   mmap_list로 mmap 페이지를 관리할거면 필요 x */
-		// case VM_FILE:
-		// 	page_initializer = file_backed_initializer;
-		// 	break;
-		// default:
-		// 	free(page);
-		// 	goto err;
-		// 	break;
-		// }
-
+		switch (VM_TYPE(type))
+		{
+			case VM_ANON:
+				page_initializer = anon_initializer;
+				break;
+			case VM_FILE:
+				page_initializer = file_backed_initializer;
+				break;
+			default:
+				goto err;
+		}
+		/* TODO: spt에 페이지를 삽입합니다. */
 		uninit_new(page, upage, init, type, aux, page_initializer);
-		/* TODO: 생성한 페이지를 spt에 삽입하세요. */
+		page->writable = writable;
+
+		if (!spt_insert_page(spt, page)) {
+			return true;
+		}
 	}
+	else
+		return false;
 err:
+	free(page);
 	return false;
 }
 
@@ -97,21 +99,16 @@ err:
 /* 가상 주소를 통해 SPT에서 페이지를 찾아 리턴합니다.
  * 에러가 발생하면 NULL을 리턴하세요. */
 struct page *
-spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) 
-{
+spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	struct page *page = NULL;
 	/* TODO: Fill this function. */
-
 	/* 25.05.30 고재웅 작성 */
-	page.va = pg_round_down(va);
-	// 보조 테이블에서 va가 포함된 구조체를 찾는다.
-  	struct hash_elem *find_elem = hash_find(&spt->pages, page->hash_elem);
-	// 찾지 못했다면 NULL 반환
-	if (find_elem == NULL){
+	struct page temp;
+	temp.va = pg_round_down(va);
+	struct hash_elem *e = hash_find(&spt->pages, &temp.hash_elem);
+	if (e == NULL)
 		return NULL;
-	}
-	// 구조체를 찾으면 구조체를 반환
-	return hash_entry(find_elem, struct page, hash_elem);
+	return hash_entry(e, struct page, hash_elem);
 }
 
 /* PAGE를 spt에 삽입하며 검증을 수행합니다. */
@@ -182,10 +179,28 @@ vm_get_frame(void)
 {
 	struct frame *frame = NULL;
 	/* TODO: Fill this function. */
-	/*
-	 * 여기서 swap_out을 진행해야 합니다.
-	 * pml4_clear_page를 사용해서 물리 주소를 클리어 합니다.
-	 */
+	/* 25.05.30 고재웅 작성 */
+
+	// 1. 유저 풀에서 새로운 페이지 할당
+	void *kva = palloc_get_page(PAL_USER);
+
+	// 2. 할당 실패 시 PANIC
+	if (kva == NULL) {
+		PANIC("todo: implement eviction here");
+	}
+
+	// 3. 프레임 구조체 할당 및 초기화
+	frame = malloc(sizeof(struct frame));
+	if (frame == NULL) {
+		PANIC("frame allocation failed");
+	}
+
+	frame->kva = kva;
+	frame->page = NULL;  // 아직 연결된 페이지 없음
+	frame->owner = thread_current();  // 현재 스레드를 소유자로 설정
+
+	// 4. 전역 frame_table에 프레임 등록
+	list_push_back(&frame_table, &frame->elem);
 
 	ASSERT(frame != NULL);
 	ASSERT(frame->page == NULL);
@@ -217,6 +232,31 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 	struct page *page = NULL;
 	/* TODO: Validate the fault */
 	/* TODO: Your code goes here */
+	// 1. 주소 유효성 검사
+	if (addr == NULL || is_kernel_vaddr(addr)) {
+		return false;
+	}
+
+	// 2. 접근 권한 검사
+	if (!not_present) {
+		// 존재하는 페이지에 대해 쓰기 금지 등
+		return false;
+	}
+
+	// 3. 주소를 페이지 기준으로 내림 (page alignment)
+	void *page_va = pg_round_down(addr);
+
+	// 4. 보조 페이지 테이블에서 해당 페이지 찾기
+	page = spt_find_page(spt, page_va);
+	if (page == NULL) {
+		// 스택 확장을 고려해 여기서 vm_stack_growth 등을 호출할 수도 있음
+		return false;
+	}
+
+	// 5. 쓰기 접근인데 읽기 전용 페이지면 오류
+	if (write && !page->writable) {
+		return false;
+	}
 
 	return vm_do_claim_page (page);
 }
@@ -252,6 +292,10 @@ vm_do_claim_page (struct page *page)
 	page->frame = frame;
 
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
+	/* 페이지의 VA와 프레임의 KVA를 페이지 테이블에 매핑 */
+	if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable)) {
+		return false;
+	}
 
 	return swap_in (page, frame->kva);
 }
@@ -260,6 +304,8 @@ vm_do_claim_page (struct page *page)
 /* 25.05.30 고재웅 작성 */
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+	/* SPT 초기화시 hash_init에 아래 작성한 page_hash, page_less를 포함한다. */
+	hash_init(&spt->pages, page_hash, page_less, NULL);
 }
 
 /* Copy supplemental page table from src to dst */
@@ -281,7 +327,7 @@ supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED)
 /* SPT 해시 테이블에 넣기 위한 hash_func & less_func 함수 구현 */
 
 /* page_hash 가상 주소를 바탕으로 해시값을 계산한다. */
-uint64_t page_hash(onst struct hash_elem *e, void *aux){
+uint64_t page_hash(const struct hash_elem *e, void *aux){
 	struct page *p = hash_entry(e, struct page, hash_elem);
 	return hash_bytes(&p, sizeof(p->va));
 }
@@ -290,6 +336,6 @@ uint64_t page_hash(onst struct hash_elem *e, void *aux){
 bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux){
 	/* 이 함수는 해시 테이블 충돌 시 내부 정렬에 사용된다고 한다. */
 	struct page *pa = hash_entry(a, struct page, hash_elem);
-	struct page *pb = hash_entry(b, struct page, hesh_elem);
+	struct page *pb = hash_entry(b, struct page, hash_elem);
 	return pa->va < pb->va;
 }
