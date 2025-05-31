@@ -1,6 +1,7 @@
 #ifndef VM_VM_H
 #define VM_VM_H
 #include <stdbool.h>
+#include <hash.h>
 #include "threads/palloc.h"
 
 enum vm_type {
@@ -33,6 +34,7 @@ enum vm_type {
 
 struct page_operations;
 struct thread;
+struct list frame_table;
 
 #define VM_TYPE(type) ((type) & 7)
 
@@ -67,6 +69,11 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
+
+	struct list_elem elem; 
+	struct thread *owner;
+	bool pinned;
+
 };
 
 /* The function table for page operations.
@@ -117,7 +124,7 @@ enum vm_type page_get_type (struct page *page);
 
 /* 25.05.30 고재웅 작성 */
 /* SPT 해시 테이블에 넣기 위한 hash_func & less_func 함수 선언 */
-uint64_t page_hash(onst struct hash_elem *e, void *aux);
+uint64_t page_hash(const struct hash_elem *e, void *aux);
 bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux);
 
 
