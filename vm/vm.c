@@ -95,13 +95,13 @@ err:
 	return false;
 }
 
-/* Find VA from spt and return page. On error, return NULL. */
-/* 가상 주소를 통해 SPT에서 페이지를 찾아 리턴합니다.
+/* va → struct page *를 찾는 함수
+ * 가상 주소를 통해 SPT에서 페이지를 찾아 리턴합니다.
  * 에러가 발생하면 NULL을 리턴하세요. */
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	struct page *page = NULL;
-	/* TODO: Fill this function. */
+
 	/* 25.05.30 고재웅 작성 */
 	struct page temp;
 	temp.va = pg_round_down(va);
@@ -111,25 +111,14 @@ spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	return hash_entry(e, struct page, hash_elem);
 }
 
-/* PAGE를 spt에 삽입하며 검증을 수행합니다. */
+/* 주어진 PAGE를 spt에 삽입하며 검증을 수행합니다. 
+ * 이미 해당 가상 주소가 등록되어 있다면 실패 처리해야 합니다. */
 bool
-spt_insert_page (struct supplemental_page_table *spt UNUSED,
-		struct page *page UNUSED) 
+spt_insert_page (struct supplemental_page_table *spt UNUSED, struct page *page UNUSED) 
 {
-	int succ = false;
-	/* TODO: Fill this function. */
-
-	/* 25.05.30 고재웅 작성 */
-	// 먼저 페이지 테이블에서 가상 주소가 존재하지 않는지 검사한다.
-	struct hash_elem *prev_elem = hash_find(&spt->pages, &page->hash_elem);
-	if (prev_elem == NULL){
-	  	// 페이지 테이블에 페이지 구조체를 삽입한다.
-		if (hash_insert(&spt->pages, &page->hash_elem)){
-			succ = true;
-			return succ;
-		}
-	}
-	return succ;
+	/* 25.05.30 정진영 작성 */
+	/* hash_insert는 중복 키가 존재하면 기존 요소를 반환하고, 성공적으로 삽입되면 NULL을 반환한다. */
+	return hash_insert(&spt->pages, &page->hash_elem) == NULL;
 }
 
 void
@@ -302,34 +291,21 @@ vm_do_claim_page (struct page *page)
 
 /* Initialize new supplemental page table */
 /* 25.05.30 고재웅 작성 */
+
+/* 프로세스가 시작될 때(initd) or 포크될 때(__do_fork) 호출되는 함수 */
 void
-supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) 
+{
 	/* SPT 초기화시 hash_init에 아래 작성한 page_hash, page_less를 포함한다. */
 	hash_init(&spt->pages, page_hash, page_less, NULL);
 }
 
-/* Copy supplemental page table from src to dst */
-bool
-supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
-		struct supplemental_page_table *src UNUSED) 
-{
-}
-
-/* Free the resource hold by the supplemental page table */
-void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) 
-{
-	/* TODO: 스레드가 보유한 모든 supplemental_page_table을 제거하고,
-	 * TODO: 수정된 내용을 스토리지에 기록(writeback)하세요. */
-}
-
-/* 25.05.30 고재웅 작성 */
 /* SPT 해시 테이블에 넣기 위한 hash_func & less_func 함수 구현 */
 
 /* page_hash 가상 주소를 바탕으로 해시값을 계산한다. */
 uint64_t page_hash(const struct hash_elem *e, void *aux){
 	struct page *p = hash_entry(e, struct page, hash_elem);
-	return hash_bytes(&p, sizeof(p->va));
+	return hash_bytes(&p->va, sizeof(p->va));
 }
 
 /* 두 page의 va를 기준으로 정렬을 비교한다. */
@@ -338,4 +314,45 @@ bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux){
 	struct page *pa = hash_entry(a, struct page, hash_elem);
 	struct page *pb = hash_entry(b, struct page, hash_elem);
 	return pa->va < pb->va;
+}
+
+/* 주로 fork() 혹은 __do_fork() 시, 자식도 부모처럼 똑같은 주소 공간을 갖기 위해 SPT를 복사
+ * hash_first(), hash_next()를 써서 src의 모든 페이지를 순회하면서 dst에 복사해야 합니다. */
+bool
+supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
+		struct supplemental_page_table *src UNUSED) 
+{
+	/* 	🟪 TODO 
+	복사 시:
+	•	page_get_type()으로 타입 확인
+	•	vm_alloc_page_with_initializer()로 새 페이지 생성
+	•	claim_page() 후 실제 물리 메모리 복사 
+
+	단순 복사는 struct page만 (init 정보), 내용 복사는 struct page + 메모리의 내용 (frame or swap) 까지
+	내용 복사 하려면 frame 할당이랑 memcpy 필요함
+
+	- uninit lazy page: 아직 실제 데이터가 로딩되지 않음 -> 단순 복사 (init 정보만 복사)
+	- frame이 있는 페이지: 이미 메모리에 올라감 -> 실제 메모리 내용도 복사해야 함
+	- 스왑된 페이지: 디스크에만 있음 -> 복원 후 복사하거나 스왑 슬롯 공유 고려
+
+	page->frame == NULL이면 실제로 메모리에 올라오지 않음. 
+	즉, 아직 page fault가 발생하지 않은 lazy-load 페이지
+	혹은 swap-out 되어 메모리에는 없는 페이지
+	이런 경우는 데이터 복사 불필요 -> vm_alloc_page_with_initializer()로 초기 정보만 복사해서 동일한 lazy loading 조건을 만들면 됨!!!
+	*/
+}
+
+/* Free the resource hold by the supplemental page table */
+void
+supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) 
+{
+	/* TODO: 스레드가 보유한 모든 supplemental_page_table을 제거하고,
+	 * TODO: 수정된 내용을 스토리지에 기록(writeback)하세요. */
+
+	/* 	🟪 TODO 
+	hash_destroy() 사용
+	•	각 페이지에 대해 destroy(page) 호출해서:
+	•	swap out 필요 시 writeback
+	•	프레임 반환
+	•	구조체 메모리 해제 */
 }

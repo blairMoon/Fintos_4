@@ -6,8 +6,8 @@
 #ifndef VM_VM_H
 #define VM_VM_H
 #include <stdbool.h>
-#include <hash.h>
 #include "threads/palloc.h"
+#include <hash.h>	/* Project 3: Memory Management */
 
 enum vm_type {
 	/* 초기화되지 않은 페이지 */
@@ -50,9 +50,9 @@ struct list frame_table;
  * uninit_page, file_page, anon_page, 그리고 page cache(project4)입니다.
  * 이 구조체의 미리 정의된 멤버를 제거하거나 수정하지 마십시오. */
 struct page {
-	const struct page_operations *operations;
-	void *va;              /* Address in terms of user space */
-	struct frame *frame;   /* Back reference for frame */
+	const struct page_operations *operations;	/* 페이지에 대한 동작 함수 (swap-in, swap-out 등) */
+	void *va;              						/* 사용자 주소 공간의 가상 주소 */
+	struct frame *frame;   						/* 이 페이지가 매핑된 물리 프레임 */
 
 	/* Your implementation */
 	/* 25.05.30 고재웅 작성 */
@@ -60,8 +60,8 @@ struct page {
 	bool writable; 						// 쓰기 가능한 페이지 인지
 	bool is_loaded;						// 실제로 프레임에 로드되어 있는지
 
-	/* 타입별 데이터는 union에 바인딩됩니다.
-	 * 각 함수는 현재 union을 자동으로 감지합니다. */
+	/* union은 여러 타입 중 하나만을 저장할 수 있는 특수한 자료형으로,  
+	 * 타입별 데이터는 union에 바인딩 됩니다. 각 함수는 현재 union을 자동으로 감지합니다. */
 	union {
 		struct uninit_page uninit;
 		struct anon_page anon;
@@ -103,7 +103,7 @@ struct page_operations {
  * 모든 설계는 여러분에게 달려 있습니다. */
 struct supplemental_page_table {
 	/* 25.05.30 고재웅 작성 */
-	struct hash pages; 
+	struct hash pages;
 };
 
 #include "threads/thread.h"
