@@ -77,9 +77,6 @@ struct frame {
 	void *kva;
 	struct page *page;
 	struct list_elem elem; 
-	struct thread *owner;
-	bool pinned;
-
 };
 
 /* 페이지 작업을 위한 함수 테이블입니다.
@@ -132,5 +129,6 @@ enum vm_type page_get_type (struct page *page);
 /* SPT 해시 테이블에 넣기 위한 hash_func & less_func 함수 선언 */
 uint64_t page_hash(const struct hash_elem *e, void *aux);
 bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux);
+void hash_page_destroy(struct hash_elem *e, void *aux);
 
 #endif  /* VM_VM_H */
