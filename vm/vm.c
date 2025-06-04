@@ -312,13 +312,12 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst,
 		void *upage = src_page->va;
 		bool writable = src_page->writable;
 
-		// [1] Lazy loading 페이지 (uninit) 복사
+		// [1] Lazy Loading (UNINIT)
 		if (type == VM_UNINIT)
 		{
 			vm_initializer *init = src_page->uninit.init;
 			void *aux = src_page->uninit.aux;
 
-			// 📌 파일 페이지인 경우: aux 깊은 복사 + file_duplicate()
 			if (src_page->uninit.type == VM_FILE)
 			{
 				struct lazy_load_arg *src_aux = (struct lazy_load_arg *)aux;
@@ -336,16 +335,15 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst,
 			}
 			else
 			{
-				// 일반 anon, stack 등
-				if (!vm_alloc_page_with_initializer(VM_ANON, upage, writable, init, aux))
+				if (!vm_alloc_page_with_initializer(src_page->uninit.type, upage, writable, init, aux))
 					return false;
 			}
 
 			continue;
 		}
 
-		// [2] 이미 초기화된 일반 페이지 (anon 등) 처리
-		if (!vm_alloc_page_with_initializer(type, upage, writable, NULL, NULL))
+		// [2] 이미 초기화된 일반 페이지 (ANON, FILE 등)
+		if (!vm_alloc_page(type, upage, writable))
 			return false;
 
 		if (!vm_claim_page(upage))

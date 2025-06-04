@@ -12,6 +12,8 @@
 #include "userprog/process.h"
 #include "threads/palloc.h"
 #include <string.h>
+void *mmap(void *addr, size_t length, int writable, int fd, off_t offset);
+void munmap(void *addr);
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
@@ -63,7 +65,29 @@ void check_address(void *addr)
 #endif
     }
 }
+void *mmap(void *addr, size_t length, int writable, int fd, off_t offset)
+{
+    if (addr == NULL || addr != pg_round_down(addr))
+        return NULL;
+    if (offset % PGSIZE != 0)
+        return NULL;
+    if (!is_user_vaddr(addr) || !is_user_vaddr(addr + length))
+        return NULL;
+    if (spt_find_page(&thread_current()->spt, addr))
+        return NULL;
+    if (fd <= 1)
+        return NULL;
 
+    struct file *f = process_get_file(fd);
+    if (f == NULL || file_length(f) == 0 || (int)length <= 0)
+        return NULL;
+
+    return do_mmap(addr, length, writable, f, offset);
+}
+void munmap(void *addr)
+{
+    do_munmap(addr);
+}
 void syscall_init(void)
 {
     write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48 |
@@ -129,6 +153,12 @@ void syscall_handler(struct intr_frame *f UNUSED)
         break;
     case SYS_CLOSE:
         close(f->R.rdi);
+        break;
+    case SYS_MMAP:
+        f->R.rax = mmap(f->R.rdi, f->R.rsi, f->R.rdx, f->R.r10, f->R.r8);
+        break;
+    case SYS_MUNMAP:
+        munmap(f->R.rdi);
         break;
     default:
         exit(-1);
