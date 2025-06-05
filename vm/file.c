@@ -5,6 +5,7 @@
 #include "threads/vaddr.h"
 #include "userprog/process.h"
 #include "lib/round.h" //  ROUND_UP, DIV_ROUND_UP
+#include "filesys/file.h"
 
 static bool file_backed_swap_in(struct page *page, void *kva);
 static bool file_backed_swap_out(struct page *page);
@@ -54,15 +55,28 @@ file_backed_swap_out(struct page *page)
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
-static void
-file_backed_destroy(struct page *page)
+static void file_backed_destroy(struct page *page)
 {
-	struct file_page *file_page UNUSED = &page->file;
+	struct file_page *file_page = &page->file;
+
+	// page 또는 frame 또는 file이 NULL이면 아무 작업도 하지 않음
+	if (page == NULL || page->frame == NULL || file_page->file == NULL)
+	{
+		return;
+	}
+
+	// 현재 프로세스의 pml4
+	uint64_t *pml4 = thread_current()->pml4;
+
+	// 해당 페이지가 dirty라면 write-back 수행
 	if (pml4_is_dirty(thread_current()->pml4, page->va))
 	{
-		file_write_at(file_page->file, page->va, file_page->read_bytes, file_page->ofs);
-		pml4_set_dirty(thread_current()->pml4, page->va, 0);
+		// 커널 가상 주소(kva)를 기준으로 파일에 저장
+		file_write_at(file_page->file, page->frame->kva, file_page->read_bytes, file_page->ofs);
+		pml4_set_dirty(thread_current()->pml4, page->va, false);
 	}
+
+	// 페이지 테이블에서 해당 가상 주소 매핑 제거
 	pml4_clear_page(thread_current()->pml4, page->va);
 }
 

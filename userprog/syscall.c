@@ -272,9 +272,7 @@ int read(int fd, void *buffer, unsigned size)
     if (file == NULL) // 파일이 비어있을 경우
         return -1;
 
-    lock_acquire(&filesys_lock);
     bytes = file_read(file, buffer, size);
-    lock_release(&filesys_lock);
 
     return bytes;
 }
