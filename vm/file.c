@@ -27,10 +27,16 @@ void vm_file_init(void)
 /* Initialize the file backed page */
 bool file_backed_initializer(struct page *page, enum vm_type type, void *kva)
 {
-	/* Set up the handler */
 	page->operations = &file_ops;
 
 	struct file_page *file_page = &page->file;
+	struct lazy_load_arg *lazy_load_arg = (struct lazy_load_arg *)page->uninit.aux;
+
+	file_page->file = lazy_load_arg->file;
+	file_page->ofs = lazy_load_arg->ofs;
+	file_page->read_bytes = lazy_load_arg->read_bytes;
+	file_page->zero_bytes = lazy_load_arg->zero_bytes;
+	return true;
 }
 
 /* Swap in the page by read contents from the file. */
@@ -55,70 +61,85 @@ file_backed_swap_out(struct page *page)
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
-static void file_backed_destroy(struct page *page)
+static void
+file_backed_destroy(struct page *page)
 {
-	struct file_page *file_page = &page->file;
-
-	// page 또는 frame 또는 file이 NULL이면 아무 작업도 하지 않음
-	if (page == NULL || page->frame == NULL || file_page->file == NULL)
-	{
-		return;
-	}
-
-	// 현재 프로세스의 pml4
-	uint64_t *pml4 = thread_current()->pml4;
-
-	// 해당 페이지가 dirty라면 write-back 수행
+	// page struct를 해제할 필요는 없습니다. (file_backed_destroy의 호출자가 해야 함)
+	struct file_page *file_page UNUSED = &page->file;
 	if (pml4_is_dirty(thread_current()->pml4, page->va))
 	{
-		// 커널 가상 주소(kva)를 기준으로 파일에 저장
-		file_write_at(file_page->file, page->frame->kva, file_page->read_bytes, file_page->ofs);
-		pml4_set_dirty(thread_current()->pml4, page->va, false);
+		file_write_at(file_page->file, page->va, file_page->read_bytes, file_page->ofs);
+		pml4_set_dirty(thread_current()->pml4, page->va, 0);
 	}
-
-	// 페이지 테이블에서 해당 가상 주소 매핑 제거
 	pml4_clear_page(thread_current()->pml4, page->va);
 }
 
 /* Do the mmap */
-
 void *
 do_mmap(void *addr, size_t length, int writable,
 				struct file *file, off_t offset)
 {
-	ASSERT(addr != NULL);
-	ASSERT(pg_ofs(addr) == 0);		// addr is page-aligned
-	ASSERT(offset % PGSIZE == 0); // offset is page-aligned
+	// 초기 정보 출력
+	// printf("[do_mmap] called: addr=%p, length=%zu, offset=%d, writable=%d\n", addr, length, offset, writable);
+
+	// NULL 주소일 경우 처리: 스택 기준 자동 할당
+	if (addr == NULL)
+	{
+		addr = pg_round_down((void *)(USER_STACK - length));
+		// printf("[do_mmap] addr was NULL, assigned to %p\n", addr);
+	}
+
+	// 정렬 조건 검사
+	if (!addr || pg_round_down(addr) != addr || is_kernel_vaddr(addr) || is_kernel_vaddr(addr + length))
+	{
+		// printf("[do_mmap] addr is invalid (alignment or kernel address)\n");
+		return NULL;
+	}
+
+	if (offset % PGSIZE != 0)
+	{
+		// printf("[do_mmap] offset is not page-aligned\n");
+		return NULL;
+	}
 
 	struct file *f = file_reopen(file);
 	if (f == NULL)
+	{
+		// printf("[do_mmap] file_reopen failed\n");
 		return NULL;
+	}
 
-	void *start_addr = addr;
-
-	// 실제 읽을 파일 길이: 요청한 length vs 파일 크기 중 작은 값
 	size_t file_len = file_length(f);
 	size_t read_bytes = length < file_len ? length : file_len;
 	size_t zero_bytes = ROUND_UP(length, PGSIZE) - read_bytes;
-
 	int total_page_count = DIV_ROUND_UP(length, PGSIZE);
 
+	void *start_addr = addr;
+
+	// 페이지 단위로 매핑 수행
 	while (read_bytes > 0 || zero_bytes > 0)
 	{
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		// lazy_load_segment에 넘겨줄 보조 데이터 구성
 		struct lazy_load_arg *aux = malloc(sizeof(struct lazy_load_arg));
 		if (!aux)
+		{
+			// printf("[do_mmap] aux malloc failed\n");
 			return NULL;
+		}
+
 		aux->file = f;
 		aux->ofs = offset;
 		aux->read_bytes = page_read_bytes;
 		aux->zero_bytes = page_zero_bytes;
 
 		if (!vm_alloc_page_with_initializer(VM_FILE, addr, writable, lazy_load_segment, aux))
+		{
+			// printf("[do_mmap] vm_alloc_page_with_initializer failed at addr=%p\n", addr);
+			free(aux);
 			return NULL;
+		}
 
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
@@ -126,12 +147,17 @@ do_mmap(void *addr, size_t length, int writable,
 		addr += PGSIZE;
 	}
 
-	// 첫 번째 page에 mapped_page_count 저장 (unmap 시 참조)
+	// 첫 페이지 찾아서 page_count 저장
 	struct page *first_page = spt_find_page(&thread_current()->spt, start_addr);
 	if (first_page == NULL)
+	{
+		// printf("[do_mmap] failed to find first page at %p\n", start_addr);
 		return NULL;
+	}
 	first_page->mapped_page_count = total_page_count;
 
+	// 성공 로그
+	// printf("[do_mmap] success: start_addr=%p, total_pages=%d\n", start_addr, total_page_count);
 	return start_addr;
 }
 
@@ -141,11 +167,10 @@ void do_munmap(void *addr)
 	struct supplemental_page_table *spt = &thread_current()->spt;
 	struct page *p = spt_find_page(spt, addr);
 	int count = p->mapped_page_count;
-
 	for (int i = 0; i < count; i++)
 	{
 		if (p)
-			destroy(p); // 내부적으로 file_backed_destroy를 호출하게 됨
+			destroy(p);
 		addr += PGSIZE;
 		p = spt_find_page(spt, addr);
 	}

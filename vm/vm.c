@@ -11,6 +11,7 @@
 /* 25.05.30 고재웅 작성 */
 #include <hash.h>
 #include "threads/vaddr.h"
+static struct lock frame_table_lock;
 
 /* 각 서브시스템의 초기화 코드를 호출하여 가상 메모리 서브시스템을 초기화합니다. */
 void vm_init(void)
@@ -24,6 +25,7 @@ void vm_init(void)
 	/* 이 위쪽은 수정하지 마세요 !! */
 	/* TODO: 이 아래쪽부터 코드를 추가하세요 */
 	list_init(&frame_table); /* 25.05.30 고재웅 작성 */
+	lock_init(&frame_table_lock);
 }
 
 /* 페이지의 타입을 가져옵니다. 이 함수는 페이지가 초기화된 후 타입을 알고 싶을 때 유용합니다.
@@ -70,6 +72,10 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 		 * TODO: 그런 다음 uninit_new를 호출하여 "uninit" 페이지 구조체를 생성합니다.
 		 * TODO: uninit_new를 호출한 후 필드를 수정해야 합니다. */
 		struct page *p = (struct page *)malloc(sizeof(struct page));
+		if (p == NULL)
+		{
+			return false;
+		}
 		bool (*page_initializer)(struct page *, enum vm_type, void *);
 
 		switch (VM_TYPE(type))
@@ -80,6 +86,9 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 		case VM_FILE:
 			page_initializer = file_backed_initializer;
 			break;
+		default:
+			free(p);
+			return false;
 		}
 		/* TODO: spt에 페이지를 삽입합니다. */
 		uninit_new(p, upage, init, type, aux, page_initializer);
@@ -121,15 +130,25 @@ bool spt_insert_page(struct supplemental_page_table *spt UNUSED, struct page *pa
 
 void spt_remove_page(struct supplemental_page_table *spt, struct page *page)
 {
+	if (page == NULL)
+	{
+		// printf("[spt_remove_page] page is NULL\n");
+		return;
+	}
+
+	// printf("[spt_remove_page] removing page at %p\n", page->va);
+
+	// 1. SPT에서 해당 page를 제거
+	hash_delete(&spt->pages, &page->hash_elem);
+
+	// 2. 물리 메모리 매핑 해제 (있다면)
+
+	// 3. 페이지 구조체 메모리 해제
+	// printf("[spt_remove_page] calling destroy()\n");
+	destroy(page);
+
+	// printf("[spt_remove_page] calling vm_dealloc_page()\n");
 	vm_dealloc_page(page);
-
-	/** TODO: page 해제
-	 * 매핑된 프레임을 해제해야하나?
-	 * 프레임이 스왑되어있는지 체크할것?
-	 * 아마 pml4_clear_page 사용하면 된대요
-	 */
-
-	return true;
 }
 
 /* 교체될 struct frame을 가져옵니다. */
@@ -164,26 +183,24 @@ vm_evict_frame(void)
 static struct frame *
 vm_get_frame(void)
 {
-	/* TODO: Fill this function. */
-	struct frame *frame = NULL;
-
-	// 1. 유저 풀에서 새로운 페이지 할당
-	void *kva = palloc_get_page(PAL_USER);
-
-	// 2. 할당 실패 시 PANIC
+	// 물리 페이지 할당
+	void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
 	if (kva == NULL)
-	{
-		// 추후 페이지 교체를 추가해야 한다.
-		PANIC("todo: implement eviction here");
-	}
+		return vm_evict_frame(); // 페이지 교체 전략 필요
 
-	// 3. 프레임 구조체 할당 및 초기화
-	frame = (struct frame *)malloc(sizeof(struct frame));
-	frame->kva = kva; // 프레임의 물리 주소 (kva는 물리 주소를 커널의 가상 주소로 1대 1로 매핑해 놓았다.)
+	// 프레임 구조체 할당
+	struct frame *frame = (struct frame *)malloc(sizeof(struct frame));
+	ASSERT(frame != NULL);
+
+	frame->kva = kva;
 	frame->page = NULL;
 
-	ASSERT(frame != NULL);
-	ASSERT(frame->page == NULL);
+	// 프레임 테이블에 등록
+	lock_acquire(&frame_table_lock);
+
+	list_push_back(&frame_table, &frame->elem);
+	lock_release(&frame_table_lock);
+
 	return frame;
 }
 
@@ -290,8 +307,10 @@ vm_do_claim_page(struct page *page)
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
 	/* 페이지의 VA와 프레임의 KVA를 페이지 테이블에 매핑 */
 	struct thread *current = thread_current();
-	pml4_set_page(current->pml4, page->va, frame->kva, page->writable);
-
+	if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable))
+	{
+		return false;
+	}
 	return swap_in(page, frame->kva);
 }
 

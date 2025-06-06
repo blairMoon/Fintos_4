@@ -73,9 +73,9 @@ void *mmap(void *addr, size_t length, int writable, int fd, off_t offset)
         return NULL;
     if (!is_user_vaddr(addr) || !is_user_vaddr(addr + length))
         return NULL;
-    if (spt_find_page(&thread_current()->spt, addr))
+    if (spt_find_page(&thread_current()->spt, addr)) // 얘도 문제일 수 있어
         return NULL;
-    if (fd <= 1)
+    if (fd <= 2) // 얘도 1로
         return NULL;
 
     struct file *f = process_get_file(fd);
