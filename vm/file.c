@@ -61,17 +61,27 @@ file_backed_swap_out(struct page *page)
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
-static void
-file_backed_destroy(struct page *page)
+void file_backed_destroy(struct page *page)
 {
-	// page struct를 해제할 필요는 없습니다. (file_backed_destroy의 호출자가 해야 함)
-	struct file_page *file_page UNUSED = &page->file;
-	if (pml4_is_dirty(thread_current()->pml4, page->va))
+	struct file_page *file_page = &page->file;
+
+	// dirty면 파일에 다시 쓰기
+	if (page->frame != NULL &&
+			pml4_is_dirty(thread_current()->pml4, page->va))
 	{
-		file_write_at(file_page->file, page->va, file_page->read_bytes, file_page->ofs);
-		pml4_set_dirty(thread_current()->pml4, page->va, 0);
+		file_write_at(file_page->file,
+									page->frame->kva,
+									file_page->read_bytes,
+									file_page->ofs);
 	}
-	pml4_clear_page(thread_current()->pml4, page->va);
+
+	// 프레임 해제 (함수 안 만들고 직접 처리)
+	if (page->frame != NULL)
+	{
+		palloc_free_page(page->frame->kva); // 물리 페이지 반환
+		free(page->frame);									// 프레임 구조체 반환
+		page->frame = NULL;
+	}
 }
 
 /* Do the mmap */
@@ -166,12 +176,18 @@ void do_munmap(void *addr)
 {
 	struct supplemental_page_table *spt = &thread_current()->spt;
 	struct page *p = spt_find_page(spt, addr);
+	if (!p)
+		return;
+
 	int count = p->mapped_page_count;
+
 	for (int i = 0; i < count; i++)
 	{
-		if (p)
-			destroy(p);
+		if (p != NULL)
+		{
+			spt_remove_page(spt, p); // 이 시점에서 p는 제거됨
+		}
 		addr += PGSIZE;
-		p = spt_find_page(spt, addr);
+		p = spt_find_page(spt, addr); // 이미 제거된 페이지는 NULL로 나올 것
 	}
 }

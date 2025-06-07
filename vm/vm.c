@@ -134,26 +134,13 @@ bool spt_insert_page(struct supplemental_page_table *spt UNUSED, struct page *pa
 void spt_remove_page(struct supplemental_page_table *spt, struct page *page)
 {
 	if (page == NULL)
-	{
-		// printf("[spt_remove_page] page is NULL\n");
 		return;
-	}
 
-	// printf("[spt_remove_page] removing page at %p\n", page->va);
-
-	// 1. SPT에서 해당 page를 제거
 	hash_delete(&spt->pages, &page->hash_elem);
 
-	// 2. 물리 메모리 매핑 해제 (있다면)
-
-	// 3. 페이지 구조체 메모리 해제
-	// printf("[spt_remove_page] calling destroy()\n");
-	destroy(page);
-
-	// printf("[spt_remove_page] calling vm_dealloc_page()\n");
-	vm_dealloc_page(page);
+	// 🔥 destroy() 직접 호출 금지!
+	vm_dealloc_page(page); // 내부에서 destroy → free 자동으로 처리됨
 }
-
 /* 교체될 struct frame을 가져옵니다. */
 static struct frame *
 vm_get_victim(void)
@@ -334,49 +321,61 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
 		void *upage = src_page->va;
 		bool writable = src_page->writable;
 
-		// 👇 UNINIT (lazy loading 페이지)
+		printf("[SPT copy] copying page va=%p type=%d writable=%d\n", upage, type, writable);
+
 		if (type == VM_UNINIT)
 		{
-			void *aux = src_page->uninit.aux;
+			// UNINIT 페이지는 lazy 로딩을 위해 aux 구조체 복사
 			enum vm_type real_type = page_get_type(src_page);
+			void *aux = src_page->uninit.aux;
 
-			// VM_FILE의 경우 aux deep copy
 			if (real_type == VM_FILE)
 			{
 				struct lazy_load_arg *src_aux = aux;
 				struct lazy_load_arg *dst_aux = malloc(sizeof(struct lazy_load_arg));
-				if (!dst_aux)
+				if (dst_aux == NULL)
 					return false;
 
-				dst_aux->file = file_duplicate(src_aux->file); // reopen으로 독립 file 객체
+				dst_aux->file = file_reopen(src_aux->file);
+				if (dst_aux->file == NULL)
+				{
+					printf("[SPT copy] file_reopen 실패 at va=%p\n", upage);
+					free(dst_aux);
+					return false;
+				}
 				dst_aux->ofs = src_aux->ofs;
 				dst_aux->read_bytes = src_aux->read_bytes;
 				dst_aux->zero_bytes = src_aux->zero_bytes;
 
-				if (!vm_alloc_page_with_initializer(real_type, upage, writable, src_page->uninit.init, dst_aux))
+				if (!vm_alloc_page_with_initializer(real_type, upage, writable,
+																						src_page->uninit.init, dst_aux))
+				{
+					free(dst_aux);
 					return false;
+				}
 			}
 			else
 			{
-				// UNINIT - anon 등
-				if (!vm_alloc_page_with_initializer(real_type, upage, writable, src_page->uninit.init, aux))
+				// anon 등의 나머지 타입 처리
+				if (!vm_alloc_page_with_initializer(real_type, upage, writable,
+																						src_page->uninit.init, aux))
 					return false;
 			}
 		}
 
-		// 👇 이미 로드된 페이지 (ANON, FILE)
 		else
 		{
+			// 이미 메모리에 올라온 page → anon일 경우만 처리
 			if (!vm_alloc_page(type, upage, writable))
 				return false;
-
 			if (!vm_claim_page(upage))
 				return false;
 
 			struct page *dst_page = spt_find_page(dst, upage);
-			if (!dst_page)
+			if (dst_page == NULL)
 				return false;
 
+			// file-backed는 여기서 처리 ❌ (이미 UNINIT로 처리해야 하므로)
 			memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
 		}
 	}

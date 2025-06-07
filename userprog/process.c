@@ -30,6 +30,7 @@ static void process_cleanup(void);
 static bool load(const char *file_name, struct intr_frame *if_);
 static void initd(void *f_name);
 static void __do_fork(void *);
+extern struct lock filesys_lock;
 
 /* General process initializer for initd and other process. */
 static void
@@ -190,9 +191,9 @@ __do_fork(void *aux)
 			continue;
 		current->fd_table[fd] = file_duplicate(parent->fd_table[fd]);
 	}
-
+	lock_acquire(&filesys_lock);
 	sema_up(&current->fork_sema); // fork 프로세스가 정상적으로 완료됐으므로 현재 fork용 sema unblock
-
+	lock_release(&filesys_lock);
 	process_init();
 
 	/* Finally, switch to the newly created process. */
@@ -298,6 +299,7 @@ int process_wait(tid_t child_tid)
 	list_remove(&child->child_elem);
 
 	sema_up(&child->exit_sema); // 자식 프로세스가 죽을 수 있도록 signal
+	printf("[wait] parent %d waiting for child %d\n", thread_current()->tid, child_tid);
 
 	return exit_status;
 }
@@ -314,6 +316,7 @@ void process_exit(void)
 	palloc_free_multiple(curr->fd_table, FDT_PAGES);
 
 	process_cleanup();
+	printf("[exit] tid %d exiting with status %d\n", curr->tid, curr->exit_status);
 
 	sema_up(&curr->wait_sema);	 // 자식 프로세스가 종료될 때까지 대기하는 부모에게 signal
 	sema_down(&curr->exit_sema); // 부모 프로세스가 종료될 떄까지 대기
@@ -659,21 +662,22 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack(struct intr_frame *if_)
 {
-	uint8_t *kpage;
 	bool success = false;
+	void *stack_bottom = (void *)(((uint8_t *)USER_STACK) - PGSIZE);
 
-	kpage = palloc_get_page(PAL_USER | PAL_ZERO);
-	if (kpage != NULL)
-	{
-		success = install_page(((uint8_t *)USER_STACK) - PGSIZE, kpage, true);
+	/** Project 3-Anonymous Page */
+	if (vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, 1))
+	{ // MARKER_0로 STACK에 있는 것을 표시
+		success = vm_claim_page(stack_bottom);
+
 		if (success)
+		{
 			if_->rsp = USER_STACK;
-		else
-			palloc_free_page(kpage);
+			thread_current()->stack_bottom = stack_bottom;
+		}
 	}
 	return success;
 }
-
 /* Adds a mapping from user virtual address UPAGE to kernel
  * virtual address KPAGE to the page table.
  * If WRITABLE is true, the user process may modify the page;
@@ -781,22 +785,28 @@ setup_stack(struct intr_frame *if_)
 	bool success = false;
 	void *stack_bottom = (void *)(((uint8_t *)USER_STACK) - PGSIZE);
 
-	/* TODO: Map the stack on stack_bottom and claim the page immediately.
-	 * TODO: If success, set the rsp accordingly.
-	 * TODO: You should mark the page is stack. */
-	/* TODO: Your code goes here */
-
-	/* 1) stack_bottom에 페이지를 하나 할당받는다.
-	 * VM_MARKER_0: 스택이 저장된 메모리 페이지임을 식별하기 위해 추가
-	 * writable: argument_stack()에서 값을 넣어야 하니 True */
-	if (vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_bottom, 1, NULL, NULL))
+#ifdef VM
+	/* 1. stack_bottom에 VM_MARKER_0 마커를 붙여 anonymous 페이지로 예약 */
+	if (vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_bottom, true, NULL, NULL))
 	{
-		// 2) 할당 받은 페이지에 바로 물리 프레임을 매핑한다.
+		/* 2. 해당 가상 주소를 실제 물리 메모리에 매핑 (claim) */
 		success = vm_claim_page(stack_bottom);
 		if (success)
-			// 3) rsp를 변경한다. (argument_stack에서 이 위치부터 인자를 push한다.)
+		{
+			/* 3. rsp 초기화 → argument_stack()에서 인자 push할 위치 */
 			if_->rsp = USER_STACK;
+		}
 	}
+#else
+	/* VM이 없는 경우 (Project 2 등), 직접 페이지 할당 및 매핑 */
+	uint8_t *kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+	if (kpage != NULL && install_page(stack_bottom, kpage, true))
+	{
+		if_->rsp = USER_STACK;
+		success = true;
+	}
+#endif
+
 	return success;
 }
 #endif /* VM */

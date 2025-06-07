@@ -138,6 +138,9 @@ struct thread
 #ifdef VM
     struct supplemental_page_table spt; /* 가상 메모리 테이블 */
     void *rsp;
+    void *stack_bottom;
+    void *stack_pointer;
+
 #endif
     struct semaphore wait_sema;
     struct semaphore fork_sema;

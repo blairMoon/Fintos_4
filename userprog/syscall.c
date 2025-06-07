@@ -202,7 +202,7 @@ int write(int fd, const void *buffer, unsigned size)
         return -1;
 
     lock_acquire(&filesys_lock);
-    int bytes = file_write(file, buffer, size);
+    bytes = file_write(file, buffer, size);
     lock_release(&filesys_lock);
 
     return bytes;
@@ -226,22 +226,23 @@ bool remove(const char *file)
 int open(const char *file)
 {
     check_address(file);
-    struct file *newfile = filesys_open(file);
+
     lock_acquire(&filesys_lock);
+    struct file *newfile = filesys_open(file);
 
     if (newfile == NULL)
-    {
-        lock_release(&filesys_lock);
-        return -1;
-    }
+        goto err;
 
     int fd = process_add_file(newfile);
 
     if (fd == -1)
         file_close(newfile);
-    lock_release(&filesys_lock);
 
+    lock_release(&filesys_lock);
     return fd;
+err:
+    lock_release(&filesys_lock);
+    return -1;
 }
 
 tid_t fork(const char *thread_name, struct intr_frame *f)
