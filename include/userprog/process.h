@@ -3,6 +3,9 @@
 #define FDCOUNT_LIMIT 1024
 #include "filesys/file.h"
 #include "threads/thread.h"
+#include <stdbool.h>
+#include "vm/vm.h" // 필요하다면
+
 bool lazy_load_segment(struct page *page, void *aux);
 
 struct fork_info

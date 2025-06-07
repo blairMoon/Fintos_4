@@ -202,7 +202,7 @@ int write(int fd, const void *buffer, unsigned size)
         return -1;
 
     lock_acquire(&filesys_lock);
-    bytes = file_write(file, buffer, size);
+    int bytes = file_write(file, buffer, size);
     lock_release(&filesys_lock);
 
     return bytes;
@@ -210,8 +210,11 @@ int write(int fd, const void *buffer, unsigned size)
 
 bool create(const char *file, unsigned initial_size)
 {
+    lock_acquire(&filesys_lock);
     check_address(file);
-    return filesys_create(file, initial_size);
+    bool success = filesys_create(file, initial_size);
+    lock_release(&filesys_lock);
+    return success;
 }
 
 bool remove(const char *file)
@@ -224,14 +227,19 @@ int open(const char *file)
 {
     check_address(file);
     struct file *newfile = filesys_open(file);
+    lock_acquire(&filesys_lock);
 
     if (newfile == NULL)
+    {
+        lock_release(&filesys_lock);
         return -1;
+    }
 
     int fd = process_add_file(newfile);
 
     if (fd == -1)
         file_close(newfile);
+    lock_release(&filesys_lock);
 
     return fd;
 }
@@ -241,11 +249,10 @@ tid_t fork(const char *thread_name, struct intr_frame *f)
     check_address(thread_name);
     return process_fork(thread_name, f); // 실제 유저 컨텍스트를 넘긴다
 }
-
 int read(int fd, void *buffer, unsigned size)
 {
     check_address(buffer);
-
+    lock_acquire(&filesys_lock);
     if (fd == 0)
     {              // 0(stdin) -> keyboard로 직접 입력
         int i = 0; // 쓰레기 값 return 방지
@@ -259,20 +266,35 @@ int read(int fd, void *buffer, unsigned size)
             if (c == '\0')
                 break;
         }
-
+        lock_release(&filesys_lock);
         return i;
     }
     // 그 외의 경우
     if (fd < 3) // stdout, stderr를 읽으려고 할 경우 & fd가 음수일 경우
+    {
+        lock_release(&filesys_lock);
         return -1;
+    }
 
     struct file *file = process_get_file(fd);
     off_t bytes = -1;
 
     if (file == NULL) // 파일이 비어있을 경우
+    {
+        lock_release(&filesys_lock);
         return -1;
+    }
 
+#ifdef VM
+    struct page *page = spt_find_page(&thread_current()->spt, buffer);
+    if (page && !page->writable)
+    {
+        lock_release(&filesys_lock);
+        exit(-1);
+    }
+#endif
     bytes = file_read(file, buffer, size);
+    lock_release(&filesys_lock);
 
     return bytes;
 }

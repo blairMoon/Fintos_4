@@ -72,10 +72,12 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 		 * TODO: 그런 다음 uninit_new를 호출하여 "uninit" 페이지 구조체를 생성합니다.
 		 * TODO: uninit_new를 호출한 후 필드를 수정해야 합니다. */
 		struct page *p = (struct page *)malloc(sizeof(struct page));
+
 		if (p == NULL)
 		{
 			return false;
 		}
+
 		bool (*page_initializer)(struct page *, enum vm_type, void *);
 
 		switch (VM_TYPE(type))
@@ -90,6 +92,7 @@ bool vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writabl
 			free(p);
 			return false;
 		}
+
 		/* TODO: spt에 페이지를 삽입합니다. */
 		uninit_new(p, upage, init, type, aux, page_initializer);
 		p->writable = writable;
@@ -307,6 +310,7 @@ vm_do_claim_page(struct page *page)
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
 	/* 페이지의 VA와 프레임의 KVA를 페이지 테이블에 매핑 */
 	struct thread *current = thread_current();
+
 	if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable))
 	{
 		return false;
@@ -318,61 +322,63 @@ vm_do_claim_page(struct page *page)
 /* 25.05.30 고재웅 작성 */
 
 /* 프로세스가 시작될 때(initd) or 포크될 때(__do_fork) 호출되는 함수 */
-bool supplemental_page_table_copy(struct supplemental_page_table *dst,
-																	struct supplemental_page_table *src)
+bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct supplemental_page_table *src)
 {
-	struct hash_iterator i;
-	hash_first(&i, &src->pages);
+	struct hash_iterator iter;
+	hash_first(&iter, &src->pages);
 
-	while (hash_next(&i))
+	while (hash_next(&iter))
 	{
-		struct page *src_page = hash_entry(hash_cur(&i), struct page, hash_elem);
+		struct page *src_page = hash_entry(hash_cur(&iter), struct page, hash_elem);
 		enum vm_type type = src_page->operations->type;
 		void *upage = src_page->va;
 		bool writable = src_page->writable;
 
-		// [1] Lazy Loading (UNINIT)
+		// 👇 UNINIT (lazy loading 페이지)
 		if (type == VM_UNINIT)
 		{
-			vm_initializer *init = src_page->uninit.init;
 			void *aux = src_page->uninit.aux;
+			enum vm_type real_type = page_get_type(src_page);
 
-			if (src_page->uninit.type == VM_FILE)
+			// VM_FILE의 경우 aux deep copy
+			if (real_type == VM_FILE)
 			{
-				struct lazy_load_arg *src_aux = (struct lazy_load_arg *)aux;
+				struct lazy_load_arg *src_aux = aux;
 				struct lazy_load_arg *dst_aux = malloc(sizeof(struct lazy_load_arg));
-				if (dst_aux == NULL)
+				if (!dst_aux)
 					return false;
 
-				dst_aux->file = file_duplicate(src_aux->file);
+				dst_aux->file = file_duplicate(src_aux->file); // reopen으로 독립 file 객체
 				dst_aux->ofs = src_aux->ofs;
 				dst_aux->read_bytes = src_aux->read_bytes;
 				dst_aux->zero_bytes = src_aux->zero_bytes;
 
-				if (!vm_alloc_page_with_initializer(VM_FILE, upage, writable, init, dst_aux))
+				if (!vm_alloc_page_with_initializer(real_type, upage, writable, src_page->uninit.init, dst_aux))
 					return false;
 			}
 			else
 			{
-				if (!vm_alloc_page_with_initializer(src_page->uninit.type, upage, writable, init, aux))
+				// UNINIT - anon 등
+				if (!vm_alloc_page_with_initializer(real_type, upage, writable, src_page->uninit.init, aux))
 					return false;
 			}
-
-			continue;
 		}
 
-		// [2] 이미 초기화된 일반 페이지 (ANON, FILE 등)
-		if (!vm_alloc_page(type, upage, writable))
-			return false;
+		// 👇 이미 로드된 페이지 (ANON, FILE)
+		else
+		{
+			if (!vm_alloc_page(type, upage, writable))
+				return false;
 
-		if (!vm_claim_page(upage))
-			return false;
+			if (!vm_claim_page(upage))
+				return false;
 
-		struct page *dst_page = spt_find_page(dst, upage);
-		if (dst_page == NULL)
-			return false;
+			struct page *dst_page = spt_find_page(dst, upage);
+			if (!dst_page)
+				return false;
 
-		memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
+			memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
+		}
 	}
 
 	return true;
