@@ -220,7 +220,10 @@ bool create(const char *file, unsigned initial_size)
 bool remove(const char *file)
 {
     check_address(file);
-    return filesys_remove(file);
+    lock_acquire(&filesys_lock);
+    bool is_success = filesys_remove(file);
+    lock_release(&filesys_lock);
+    return is_success;
 }
 
 int open(const char *file)
