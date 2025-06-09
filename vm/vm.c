@@ -335,7 +335,8 @@ vm_do_claim_page(struct page *page)
 /* 25.05.30 고재웅 작성 */
 
 /* 프로세스가 시작될 때(initd) or 포크될 때(__do_fork) 호출되는 함수 */
-bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct supplemental_page_table *src)
+bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED,
+																	struct supplemental_page_table *src UNUSED)
 {
 	struct hash_iterator iter;
 	hash_first(&iter, &src->pages);
@@ -347,40 +348,24 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
 		void *upage = src_page->va;
 		bool writable = src_page->writable;
 
-		// 👇 UNINIT (lazy loading 페이지)
+		/* Skip file-backed pages entirely. */
+		if ((type == VM_UNINIT && page_get_type(src_page) == VM_FILE) ||
+				(type == VM_FILE))
+		{
+			continue;
+		}
+
+		/* UNINIT (lazy loading) page */
 		if (type == VM_UNINIT)
 		{
 			void *aux = src_page->uninit.aux;
 			enum vm_type real_type = page_get_type(src_page);
 
-			// VM_FILE의 경우 aux deep copy
-			if (real_type == VM_FILE)
-			{
-				struct lazy_load_arg *src_aux = aux;
-				struct lazy_load_arg *dst_aux = malloc(sizeof(struct lazy_load_arg));
-				if (!dst_aux)
-					return false;
-				lock_acquire(&filesys_lock);
-
-				dst_aux->file = file_duplicate(src_aux->file); // reopen으로 독립 file 객체
-				lock_release(&filesys_lock);
-
-				dst_aux->ofs = src_aux->ofs;
-				dst_aux->read_bytes = src_aux->read_bytes;
-				dst_aux->zero_bytes = src_aux->zero_bytes;
-
-				if (!vm_alloc_page_with_initializer(real_type, upage, writable, src_page->uninit.init, dst_aux))
-					return false;
-			}
-			else
-			{
-				// UNINIT - anon 등
-				if (!vm_alloc_page_with_initializer(real_type, upage, writable, src_page->uninit.init, aux))
-					return false;
-			}
+			if (!vm_alloc_page_with_initializer(real_type, upage, writable,
+																					src_page->uninit.init, aux))
+				return false;
 		}
-
-		// 👇 이미 로드된 페이지 (ANON, FILE)
+		/* Loaded page (e.g., ANON) */
 		else
 		{
 			if (!vm_alloc_page(type, upage, writable))

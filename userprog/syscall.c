@@ -363,10 +363,12 @@ void close(int fd)
 
     if (fd < 3 || file == NULL)
         return;
+    lock_acquire(&filesys_lock);
 
     process_close_file(fd);
 
     file_close(file);
+    lock_release(&filesys_lock);
 }
 
 int wait(tid_t pid)
