@@ -186,14 +186,23 @@ __do_fork(void *aux)
 		goto error;
 
 	current->fd_idx = parent->fd_idx; // fdt 및 idx 복제
+	bool filesys_locked = false;
 	lock_acquire(&filesys_lock);
+	filesys_locked = true;
 	for (int fd = 3; fd < parent->fd_idx; fd++)
 	{
 		if (parent->fd_table[fd] == NULL)
 			continue;
 		current->fd_table[fd] = file_duplicate(parent->fd_table[fd]);
+		if (current->fd_table[fd] == NULL)
+		{
+			lock_release(&filesys_lock);
+			filesys_locked = false;
+			goto error;
+		}
 	}
 	lock_release(&filesys_lock);
+	filesys_locked = false;
 
 	sema_up(&current->fork_sema); // fork 프로세스가 정상적으로 완료됐으므로 현재 fork용 sema unblock
 
@@ -204,6 +213,8 @@ __do_fork(void *aux)
 		do_iret(&if_); // 정상 종료 시 자식 Process를 수행하러 감
 
 error:
+	if (filesys_locked)
+		lock_release(&filesys_lock);
 	sema_up(&current->fork_sema); // 복제에 실패했으므로 현재 fork용 sema unblock
 	exit(TID_ERROR);
 }
@@ -443,12 +454,13 @@ load(const char *file_name, struct intr_frame *if_)
 	if (t->pml4 == NULL)
 		goto done;
 	process_activate(thread_current());
-
+	lock_acquire(&filesys_lock);
 	/* Open executable file. */
 	file = filesys_open(file_name);
 	if (file == NULL)
 	{
 		printf("load: %s: open failed\n", file_name);
+		lock_release(&filesys_lock);
 		goto done;
 	}
 
@@ -457,6 +469,7 @@ load(const char *file_name, struct intr_frame *if_)
 			|| ehdr.e_version != 1 || ehdr.e_phentsize != sizeof(struct Phdr) || ehdr.e_phnum > 1024)
 	{
 		printf("load: %s: error loading executable\n", file_name);
+		lock_release(&filesys_lock);
 		goto done;
 	}
 
@@ -529,6 +542,7 @@ load(const char *file_name, struct intr_frame *if_)
 
 	t->running = file;
 	file_deny_write(file); /** Project 2: Denying Writes to Executables */
+	lock_release(&filesys_lock);
 
 	/* Set up stack. */
 	if (!setup_stack(if_))
@@ -622,6 +636,7 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
 	ASSERT(ofs % PGSIZE == 0);
 
 	file_seek(file, ofs);
+
 	while (read_bytes > 0 || zero_bytes > 0)
 	{
 		/* Do calculate how to fill this page.
