@@ -12,6 +12,8 @@
 #include <hash.h>
 #include "threads/vaddr.h"
 static struct lock frame_table_lock;
+struct lock filesys_lock;
+struct list frame_table;
 
 /* 각 서브시스템의 초기화 코드를 호출하여 가상 메모리 서브시스템을 초기화합니다. */
 void vm_init(void)
@@ -47,6 +49,11 @@ page_get_type(struct page *page)
 static struct frame *vm_get_victim(void);
 static bool vm_do_claim_page(struct page *page);
 static struct frame *vm_evict_frame(void);
+struct frame *vm_get_victim(void)
+{
+	// TODO: 나중에 구현
+	return NULL;
+}
 
 /* 25.06.01 고재웅 작성
  * 초기화 함수와 함께 대기 중인 페이지 객체를 생성한다. 페이지를 직접 생성하지 말고,
@@ -133,22 +140,15 @@ bool spt_insert_page(struct supplemental_page_table *spt UNUSED, struct page *pa
 
 void spt_remove_page(struct supplemental_page_table *spt, struct page *page)
 {
+
 	if (page == NULL)
 		return;
 
+	pml4_clear_page(thread_current()->pml4, page->va);
 	hash_delete(&spt->pages, &page->hash_elem);
 
 	// 🔥 destroy() 직접 호출 금지!
 	vm_dealloc_page(page); // 내부에서 destroy → free 자동으로 처리됨
-}
-/* 교체될 struct frame을 가져옵니다. */
-static struct frame *
-vm_get_victim(void)
-{
-	struct frame *victim = NULL;
-	/* TODO: 교체 정책을 여기서 구현해서 희생자 페이지 찾기 */
-
-	return victim;
 }
 
 /* 한 페이지를 교체(evict)하고 해당 프레임을 반환합니다.
@@ -219,9 +219,7 @@ vm_handle_wp(struct page *page UNUSED)
 
 bool is_stack_access(void *addr, void *rsp)
 {
-	return (USER_STACK - (1 << 20) <= addr) && // 1MB 제한
-				 (addr <= USER_STACK) &&
-				 ((addr >= rsp) || (addr == rsp - 8)); // 일반 접근 or PUSH 명령
+	return addr >= rsp - 8 && addr < USER_STACK && addr >= USER_STACK - (1 << 20);
 }
 bool vm_try_handle_fault(struct intr_frame *f, void *addr,
 												 bool user, bool write, bool not_present)
@@ -321,8 +319,6 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
 		void *upage = src_page->va;
 		bool writable = src_page->writable;
 
-		printf("[SPT copy] copying page va=%p type=%d writable=%d\n", upage, type, writable);
-
 		if (type == VM_UNINIT)
 		{
 			// UNINIT 페이지는 lazy 로딩을 위해 aux 구조체 복사
@@ -339,7 +335,6 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
 				dst_aux->file = file_reopen(src_aux->file);
 				if (dst_aux->file == NULL)
 				{
-					printf("[SPT copy] file_reopen 실패 at va=%p\n", upage);
 					free(dst_aux);
 					return false;
 				}
@@ -413,6 +408,7 @@ bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux)
 void hash_page_destroy(struct hash_elem *e, void *aux)
 {
 	struct page *page = hash_entry(e, struct page, hash_elem);
+	pml4_clear_page(thread_current()->pml4, page->va);
 	destroy(page);
 	free(page);
 }

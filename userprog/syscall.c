@@ -12,6 +12,8 @@
 #include "userprog/process.h"
 #include "threads/palloc.h"
 #include <string.h>
+struct lock filesys_lock;
+
 void *mmap(void *addr, size_t length, int writable, int fd, off_t offset);
 void munmap(void *addr);
 

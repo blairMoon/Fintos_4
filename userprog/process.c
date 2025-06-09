@@ -299,7 +299,6 @@ int process_wait(tid_t child_tid)
 	list_remove(&child->child_elem);
 
 	sema_up(&child->exit_sema); // 자식 프로세스가 죽을 수 있도록 signal
-	printf("[wait] parent %d waiting for child %d\n", thread_current()->tid, child_tid);
 
 	return exit_status;
 }
@@ -316,7 +315,6 @@ void process_exit(void)
 	palloc_free_multiple(curr->fd_table, FDT_PAGES);
 
 	process_cleanup();
-	printf("[exit] tid %d exiting with status %d\n", curr->tid, curr->exit_status);
 
 	sema_up(&curr->wait_sema);	 // 자식 프로세스가 종료될 때까지 대기하는 부모에게 signal
 	sema_down(&curr->exit_sema); // 부모 프로세스가 종료될 떄까지 대기
