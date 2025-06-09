@@ -210,8 +210,8 @@ int write(int fd, const void *buffer, unsigned size)
 
 bool create(const char *file, unsigned initial_size)
 {
-    lock_acquire(&filesys_lock);
     check_address(file);
+    lock_acquire(&filesys_lock);
     bool success = filesys_create(file, initial_size);
     lock_release(&filesys_lock);
     return success;
@@ -374,4 +374,4 @@ void close(int fd)
 int wait(tid_t pid)
 {
     return process_wait(pid);
-};
+}

@@ -18,6 +18,8 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "lib/string.h"
+#include "userprog/syscall.h"
+
 #include "lib/stdio.h"
 #include "intrinsic.h"
 #include "threads/synch.h"
@@ -184,12 +186,14 @@ __do_fork(void *aux)
 		goto error;
 
 	current->fd_idx = parent->fd_idx; // fdt 및 idx 복제
+	lock_acquire(&filesys_lock);
 	for (int fd = 3; fd < parent->fd_idx; fd++)
 	{
 		if (parent->fd_table[fd] == NULL)
 			continue;
 		current->fd_table[fd] = file_duplicate(parent->fd_table[fd]);
 	}
+	lock_release(&filesys_lock);
 
 	sema_up(&current->fork_sema); // fork 프로세스가 정상적으로 완료됐으므로 현재 fork용 sema unblock
 
