@@ -111,8 +111,11 @@ do_mmap(void *addr, size_t length, int writable,
 		// printf("[do_mmap] offset is not page-aligned\n");
 		return NULL;
 	}
+	lock_acquire(&filesys_lock);
 
 	struct file *f = file_reopen(file);
+	lock_release(&filesys_lock);
+
 	if (f == NULL)
 	{
 		// printf("[do_mmap] file_reopen failed\n");
@@ -174,20 +177,44 @@ do_mmap(void *addr, size_t length, int writable,
 /* Do the munmap */
 void do_munmap(void *addr)
 {
-	struct supplemental_page_table *spt = &thread_current()->spt;
-	struct page *p = spt_find_page(spt, addr);
-	if (!p)
-		return;
+	struct thread *curr = thread_current();
+	struct supplemental_page_table *spt = &curr->spt;
 
-	int count = p->mapped_page_count;
+	lock_acquire(&filesys_lock);
+
+	struct page *first_page = spt_find_page(spt, addr);
+	if (first_page == NULL)
+	{
+		lock_release(&filesys_lock);
+		return;
+	}
+
+	int count = first_page->mapped_page_count;
 
 	for (int i = 0; i < count; i++)
 	{
-		if (p != NULL)
+		struct page *page = spt_find_page(spt, addr);
+		if (page == NULL)
 		{
-			spt_remove_page(spt, p); // 이 시점에서 p는 제거됨
+			addr += PGSIZE;
+			continue;
 		}
+
+		// dirty page이면 파일로 저장
+		if (page->operations->type == VM_FILE && page->frame != NULL)
+		{
+			struct file_page *file_page = &page->file;
+			if (pml4_is_dirty(curr->pml4, page->va))
+			{
+				file_write_at(file_page->file, page->va,
+											file_page->read_bytes, file_page->ofs);
+			}
+		}
+
+		// 페이지 테이블에서 제거
+		spt_remove_page(spt, page);
 		addr += PGSIZE;
-		p = spt_find_page(spt, addr); // 이미 제거된 페이지는 NULL로 나올 것
 	}
+
+	lock_release(&filesys_lock);
 }

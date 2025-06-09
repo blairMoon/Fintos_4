@@ -139,16 +139,10 @@ bool spt_insert_page(struct supplemental_page_table *spt UNUSED, struct page *pa
 }
 
 void spt_remove_page(struct supplemental_page_table *spt, struct page *page)
-{
-
-	if (page == NULL)
-		return;
-
-	pml4_clear_page(thread_current()->pml4, page->va);
-	hash_delete(&spt->pages, &page->hash_elem);
-
-	// 🔥 destroy() 직접 호출 금지!
-	vm_dealloc_page(page); // 내부에서 destroy → free 자동으로 처리됨
+{ // 아직까지는 불리우는 곳 없는 함수
+	hash_delete(&thread_current()->spt.pages, &page->hash_elem);
+	vm_dealloc_page(page);
+	return true;
 }
 
 /* 한 페이지를 교체(evict)하고 해당 프레임을 반환합니다.
@@ -357,10 +351,33 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
 					return false;
 			}
 		}
+		else if (type == VM_FILE)
+		{
+			// file-backed 페이지가 이미 로딩된 경우에도 UNINIT으로 재등록
+			struct lazy_load_arg *dst_aux = malloc(sizeof(struct lazy_load_arg));
+			if (dst_aux == NULL)
+				return false;
 
+			dst_aux->file = file_reopen(src_page->file.file);
+			if (dst_aux->file == NULL)
+			{
+				free(dst_aux);
+				return false;
+			}
+			dst_aux->ofs = src_page->file.ofs;
+			dst_aux->read_bytes = src_page->file.read_bytes;
+			dst_aux->zero_bytes = src_page->file.zero_bytes;
+
+			if (!vm_alloc_page_with_initializer(VM_FILE, upage, writable,
+																					lazy_load_segment, dst_aux))
+			{
+				free(dst_aux);
+				return false;
+			}
+		}
 		else
 		{
-			// 이미 메모리에 올라온 page → anon일 경우만 처리
+			// anon 등 로딩 완료된 페이지 복사
 			if (!vm_alloc_page(type, upage, writable))
 				return false;
 			if (!vm_claim_page(upage))
@@ -370,7 +387,6 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
 			if (dst_page == NULL)
 				return false;
 
-			// file-backed는 여기서 처리 ❌ (이미 UNINIT로 처리해야 하므로)
 			memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
 		}
 	}
