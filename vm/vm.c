@@ -12,7 +12,9 @@
 #include <hash.h>
 #include "threads/vaddr.h"
 static struct lock frame_table_lock;
-
+struct lock filesys_lock;
+struct lock frame_lock;
+struct list_elem *next = NULL;
 /* 각 서브시스템의 초기화 코드를 호출하여 가상 메모리 서브시스템을 초기화합니다. */
 void vm_init(void)
 {
@@ -26,6 +28,7 @@ void vm_init(void)
 	/* TODO: 이 아래쪽부터 코드를 추가하세요 */
 	list_init(&frame_table); /* 25.05.30 고재웅 작성 */
 	lock_init(&frame_table_lock);
+	lock_init(&frame_lock);
 }
 
 /* 페이지의 타입을 가져옵니다. 이 함수는 페이지가 초기화된 후 타입을 알고 싶을 때 유용합니다.
@@ -159,8 +162,20 @@ static struct frame *
 vm_get_victim(void)
 {
 	struct frame *victim = NULL;
-	/* TODO: 교체 정책을 여기서 구현해서 희생자 페이지 찾기 */
-
+	/** Project 3-Swap In/Out */
+	lock_acquire(&frame_lock);
+	for (next = list_begin(&frame_table); next != list_end(&frame_table); next = list_next(next))
+	{
+		victim = list_entry(next, struct frame, elem);
+		if (pml4_is_accessed(thread_current()->pml4, victim->page->va))
+			pml4_set_accessed(thread_current()->pml4, victim->page->va, false);
+		else
+		{
+			lock_release(&frame_lock);
+			return victim;
+		}
+	}
+	lock_release(&frame_lock);
 	return victim;
 }
 
@@ -169,13 +184,11 @@ vm_get_victim(void)
 static struct frame *
 vm_evict_frame(void)
 {
-	struct frame *victim UNUSED = vm_get_victim();
-	/* TODO: swap out the victim and return the evicted frame. */
-
-	/* TODO: 여기서 swap_out 매크로를 호출??
-	 *	pml4_clear_page를 아마 사용?? (잘 모름)
-	 */
-	return NULL;
+	/** Project 3-Swap In/Out */
+	struct frame *victim = vm_get_victim();
+	if (victim->page)
+		swap_out(victim->page);
+	return victim;
 }
 
 /* 25.05.30 고재웅 작성
@@ -347,8 +360,11 @@ bool supplemental_page_table_copy(struct supplemental_page_table *dst, struct su
 				struct lazy_load_arg *dst_aux = malloc(sizeof(struct lazy_load_arg));
 				if (!dst_aux)
 					return false;
+				lock_acquire(&filesys_lock);
 
 				dst_aux->file = file_duplicate(src_aux->file); // reopen으로 독립 file 객체
+				lock_release(&filesys_lock);
+
 				dst_aux->ofs = src_aux->ofs;
 				dst_aux->read_bytes = src_aux->read_bytes;
 				dst_aux->zero_bytes = src_aux->zero_bytes;
