@@ -3,14 +3,15 @@
 #include "vm/vm.h"
 #include "userprog/process.h"
 #include "threads/vaddr.h"
-#include "userprog/process.h"
+#include <stdlib.h>
+
 #include "lib/round.h" //  ROUND_UP, DIV_ROUND_UP
 #include "filesys/file.h"
+#include "userprog/syscall.h"
 
 static bool file_backed_swap_in(struct page *page, void *kva);
 static bool file_backed_swap_out(struct page *page);
 static void file_backed_destroy(struct page *page);
-struct lock filesys_lock;
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {

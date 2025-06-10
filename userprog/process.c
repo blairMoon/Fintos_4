@@ -196,8 +196,6 @@ __do_fork(void *aux)
 		current->fd_table[fd] = file_duplicate(parent->fd_table[fd]);
 		if (current->fd_table[fd] == NULL)
 		{
-			lock_release(&filesys_lock);
-			filesys_locked = false;
 			goto error;
 		}
 	}
