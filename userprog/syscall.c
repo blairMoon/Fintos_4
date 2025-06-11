@@ -14,6 +14,7 @@
 #include <string.h>
 void *mmap(void *addr, size_t length, int writable, int fd, off_t offset);
 void munmap(void *addr);
+struct lock filesys_lock;
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
@@ -318,16 +319,15 @@ int read(int fd, void *buffer, unsigned size)
 // 파일 디스크럽터를 사용하여 파일의 크기를 가져오는 함수
 int filesize(int fd)
 {
-    struct file *file = process_get_file(fd); // 파일 포인터
-
+    struct file *file = process_get_file(fd);
     if (file == NULL)
-    {
         return -1;
-    }
 
-    return file_length(file); // 파일의 크기를 반환함
+    lock_acquire(&filesys_lock);
+    int length = file_length(file);
+    lock_release(&filesys_lock);
+    return length;
 }
-
 int exec(const char *file_name)
 {
     check_address(file_name);
@@ -350,22 +350,25 @@ int exec(const char *file_name)
 void seek(int fd, unsigned position)
 {
     struct file *file = process_get_file(fd);
-
     if (fd < 3 || file == NULL)
         return;
 
+    lock_acquire(&filesys_lock);
     file_seek(file, position);
+    lock_release(&filesys_lock);
 }
 
 // fd에서 다음에 읽거나 쓸 바이트의 위치를 반환하는 함수
 int tell(int fd)
 {
     struct file *file = process_get_file(fd);
-
     if (fd < 3 || file == NULL)
         return -1;
 
-    return file_tell(file);
+    lock_acquire(&filesys_lock);
+    int pos = file_tell(file);
+    lock_release(&filesys_lock);
+    return pos;
 }
 
 // Close file descriptor fd.

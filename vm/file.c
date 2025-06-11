@@ -3,14 +3,15 @@
 #include "vm/vm.h"
 #include "userprog/process.h"
 #include "threads/vaddr.h"
-#include "userprog/process.h"
+#include <stdlib.h>
+
 #include "lib/round.h" //  ROUND_UP, DIV_ROUND_UP
 #include "filesys/file.h"
+#include "userprog/syscall.h"
 
 static bool file_backed_swap_in(struct page *page, void *kva);
 static bool file_backed_swap_out(struct page *page);
 static void file_backed_destroy(struct page *page);
-struct lock filesys_lock;
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
@@ -149,6 +150,7 @@ do_mmap(void *addr, size_t length, int writable,
 
 	// TODO: 5. 모든 페이지가 성공적으로 매핑되었으면 addr 반환
 	// - 실패 시 중간에 등록한 페이지들을 모두 해제하고 NULL 반환
+	int mapped_pages = 0;
 
 	while (read_bytes > 0 || zero_bytes > 0)
 	{
@@ -164,9 +166,19 @@ do_mmap(void *addr, size_t length, int writable,
 		lazy_load_arg->ofs = offset;								 // 이 페이지에서 읽기 시작할 위치
 		lazy_load_arg->read_bytes = page_read_bytes; // 이 페이지에서 읽어야 하는 바이트 수
 		lazy_load_arg->zero_bytes = page_zero_bytes; // 이 페이지에서 read_bytes만큼 읽고 공간이 남아 0으로 채워야 하는 바이트 수
-
 		if (!vm_alloc_page_with_initializer(VM_FILE, addr, writable, lazy_load_segment, lazy_load_arg))
+		{
+			free(lazy_load_arg);
+			for (int i = 0; i < mapped_pages; i++)
+			{
+				void *rollback_addr = start_addr + i * PGSIZE;
+				struct page *rollback_page = spt_find_page(&thread_current()->spt, rollback_addr);
+				if (rollback_page)
+					spt_remove_page(&thread_current()->spt, rollback_page);
+			}
 			return NULL;
+		}
+		mapped_pages++;
 		struct page *p = spt_find_page(&thread_current()->spt, start_addr);
 		p->mapped_page_count = total_page_count;
 

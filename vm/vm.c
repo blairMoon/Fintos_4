@@ -12,7 +12,6 @@
 #include <hash.h>
 #include "threads/vaddr.h"
 static struct lock frame_table_lock;
-struct lock filesys_lock;
 struct lock frame_lock;
 struct list_elem *next = NULL;
 /* 각 서브시스템의 초기화 코드를 호출하여 가상 메모리 서브시스템을 초기화합니다. */
