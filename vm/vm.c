@@ -163,7 +163,7 @@ vm_get_victim(void)
 {
 	struct frame *victim = NULL;
 	/** Project 3-Swap In/Out */
-	lock_acquire(&frame_lock);
+
 	for (next = list_begin(&frame_table); next != list_end(&frame_table); next = list_next(next))
 	{
 		victim = list_entry(next, struct frame, elem);
@@ -171,11 +171,11 @@ vm_get_victim(void)
 			pml4_set_accessed(thread_current()->pml4, victim->page->va, false);
 		else
 		{
-			lock_release(&frame_lock);
+
 			return victim;
 		}
 	}
-	lock_release(&frame_lock);
+
 	return victim;
 }
 
@@ -212,10 +212,8 @@ vm_get_frame(void)
 	frame->page = NULL;
 
 	// 프레임 테이블에 등록
-	lock_acquire(&frame_table_lock);
 
 	list_push_back(&frame_table, &frame->elem);
-	lock_release(&frame_table_lock);
 
 	return frame;
 }
@@ -230,6 +228,7 @@ static void vm_stack_growth(void *addr)
 static bool
 vm_handle_wp(struct page *page UNUSED)
 {
+	return false;
 }
 
 /* 25.06.01 고재웅 작성 */

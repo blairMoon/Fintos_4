@@ -49,22 +49,22 @@ anon_swap_in(struct page *page, void *kva)
 {
 	struct anon_page *anon_page = &page->anon;
 	/** Project 3-Swap In/Out */
-	lock_acquire(&swap_lock);
+
 	if (anon_page->page_no == BITMAP_ERROR)
 	{
-		lock_release(&swap_lock);
+
 		return false;
 	}
 
 	if (!bitmap_test(swap_bitmap, anon_page->page_no))
 	{
-		lock_release(&swap_lock);
+
 		return false;
 	}
 
 	for (size_t i = 0; i < SECTOR_PER_PAGE; i++)
 		disk_read(swap_disk, (anon_page->page_no * SECTOR_PER_PAGE) + i, kva + (i * DISK_SECTOR_SIZE));
-
+	lock_acquire(&swap_lock);
 	bitmap_set(swap_bitmap, anon_page->page_no, false);
 
 	lock_release(&swap_lock);
@@ -82,9 +82,9 @@ anon_swap_out(struct page *page)
 	lock_acquire(&swap_lock);
 	size_t page_no = bitmap_scan_and_flip(swap_bitmap, 0, 1, false);
 
+	lock_release(&swap_lock);
 	if (page_no == BITMAP_ERROR)
 	{
-		lock_release(&swap_lock);
 		return false;
 	}
 
@@ -94,7 +94,6 @@ anon_swap_out(struct page *page)
 	page->frame->page = NULL;
 	page->frame = NULL;
 	pml4_clear_page(thread_current()->pml4, page->va);
-	lock_release(&swap_lock);
 }
 
 /* Destroy the anonymous page. PAGE will be freed by the caller. */
@@ -104,13 +103,14 @@ anon_destroy(struct page *page)
 	struct anon_page *anon_page = &page->anon;
 	/** Project 3-Swap In/Out */
 	if (anon_page->page_no != BITMAP_ERROR)
-		bitmap_reset(swap_bitmap, anon_page->page_no);
-
-	if (page->frame)
 	{
 		lock_acquire(&swap_lock);
-		list_remove(&page->frame->elem);
+		bitmap_reset(swap_bitmap, anon_page->page_no);
 		lock_release(&swap_lock);
+	}
+	if (page->frame)
+	{
+		list_remove(&page->frame->elem);
 		page->frame->page = NULL;
 		free(page->frame);
 		page->frame = NULL;
