@@ -186,16 +186,16 @@ __do_fork(void *aux)
 		goto error;
 
 	current->fd_idx = parent->fd_idx; // fdt 및 idx 복제
-	lock_acquire(&filesys_lock);
+
 	for (int fd = 3; fd < parent->fd_idx; fd++)
 	{
 		if (parent->fd_table[fd] == NULL)
 			continue;
 		current->fd_table[fd] = file_duplicate(parent->fd_table[fd]);
 	}
-	lock_release(&filesys_lock);
-
+	lock_acquire(&filesys_lock);
 	sema_up(&current->fork_sema); // fork 프로세스가 정상적으로 완료됐으므로 현재 fork용 sema unblock
+	lock_release(&filesys_lock);
 
 	process_init();
 
@@ -445,6 +445,7 @@ load(const char *file_name, struct intr_frame *if_)
 	process_activate(thread_current());
 
 	/* Open executable file. */
+	lock_acquire(&filesys_lock);
 	file = filesys_open(file_name);
 	if (file == NULL)
 	{
@@ -543,6 +544,8 @@ load(const char *file_name, struct intr_frame *if_)
 	success = true;
 
 done:
+	lock_release(&filesys_lock);
+
 	return success;
 }
 
